@@ -1,0 +1,241 @@
+diff --git a/memmap.h b/memmap.h
+--- a/memmap.h
++++ b/memmap.h
+@@
+ 	bool8	LoadROMWithSGBBIOSBytes (const uint8 *gb_bytes, uint32 gb_size,
+ 	                                  const char *gb_path, const char *bios_path);
++	// SGBPACK1: one-file Super Game Boy container.
++	// Returns 1 = recognized and loaded, 0 = not SGBPACK, -1 = malformed/load error.
++	int		LoadSGBPackFromBytes (const uint8 *data, uint32 size, const char *pack_path);
+ 	// Detect+load a Game Boy ROM from a memory buffer, routing it into the
+ 	// SGB subsystem. Returns 1 = handled (loaded as GB/SGB), 0 = not a GB
+ 	// ROM, -1 = GB ROM but the load failed.
+ 	int		LoadGBFromBytes (const uint8 *rom, uint32 size, const char *filename);
+
+diff --git a/memmap.cpp b/memmap.cpp
+--- a/memmap.cpp
++++ b/memmap.cpp
+@@
+ bool8 CMemory::LoadROMMem (const uint8 *source, uint32 sourceSize, const char* optional_rom_filename /*= NULL*/)
+ {
+     if(!source || sourceSize > MAX_ROM_SIZE)
+         return FALSE;
+@@
+     if (optional_rom_filename)
+         ROMFilename = optional_rom_filename;
+     else
+         ROMFilename = "MemoryROM";
+
++    // SGBPACK1 takes priority over normal SNES/GB sniffing. The container
++    // begins with a valid SGB .sfc, so without this check the ordinary SNES
++    // loader would happily treat only that first part as a standalone cart.
++    {
++        int pack = LoadSGBPackFromBytes(source, sourceSize, optional_rom_filename);
++        if (pack > 0) return TRUE;
++        if (pack < 0) return FALSE;
++    }
++
+     // In-memory GB/SGB detection — mirror LoadROM so libretro and other
+     // in-memory callers route .gb/.gbc carts (including ones wrapped in a
+     // container) into the SGB subsystem instead of the 65816 parser.
+@@
+         totalFileSize = FileLoader(ROM, filename, MAX_ROM_SIZE);
+
+         if (!totalFileSize)
+             return (FALSE);
+
++        // A .sfc SGBPACK is deliberately a single file. Detect it after
++        // FileLoader (so zip/jma/7z still work) but before any SNES scoring.
++        {
++            int pack = LoadSGBPackFromBytes(ROM, (uint32) totalFileSize, filename);
++            if (pack > 0) return TRUE;
++            if (pack < 0) return FALSE;
++        }
++
+         // Super Famicom Box carts, merged or as a MAME set, are assembled
+         // into one image here; nothing else below applies to them.
+@@
+ bool8 CMemory::LoadROMWithSGBBIOSBytes (const uint8 *gb_bytes, uint32 gb_size,
+                                          const char *gb_path, const char *bios_path)
+ {
+@@
+     return TRUE;
+ }
++
++// ---------------------------------------------------------------------------
++// SGBPACK1
++// File layout:
++//   [SGB program ROM][GB cart ROM][256-byte SGB boot ROM][256-byte footer]
++// The three blobs are unpacked in memory and fed into the BIOS-mode path
++// SuperSnes9x already uses for separate GB + SGB BIOS + boot ROM files.
++// ---------------------------------------------------------------------------
++
++namespace {
++
++struct SGBPackView
++{
++    const uint8 *sgb;
++    uint32 sgb_size;
++    const uint8 *gb;
++    uint32 gb_size;
++    const uint8 *boot;
++    uint32 boot_size;
++};
++
++static uint32 SGBPackLE32(const uint8 *p)
++{
++    return (uint32) p[0]
++         | ((uint32) p[1] << 8)
++         | ((uint32) p[2] << 16)
++         | ((uint32) p[3] << 24);
++}
++
++static uint32 SGBPackCRC32(const uint8 *data, uint32 size)
++{
++    uint32 crc = 0xffffffffU;
++    for (uint32 i = 0; i < size; ++i)
++    {
++        crc ^= data[i];
++        for (int b = 0; b < 8; ++b)
++            crc = (crc >> 1) ^ (0xedb88320U & (0U - (crc & 1U)));
++    }
++    return crc ^ 0xffffffffU;
++}
++
++// 0 = not a pack, 1 = valid pack, -1 = signature present but malformed.
++static int ParseSGBPack1(const uint8 *data, uint32 size, SGBPackView &v)
++{
++    static const uint32 footer_size = 0x100;
++    if (!data || size < footer_size)
++        return 0;
++
++    const uint8 *f = data + size - footer_size;
++    if (memcmp(f, "SGBPACK1", 8) != 0)
++        return 0;
++
++    if (SGBPackLE32(f + 0x08) != 1)
++        return -1;
++
++    const uint32 sgb_off   = SGBPackLE32(f + 0x10);
++    const uint32 sgb_size  = SGBPackLE32(f + 0x14);
++    const uint32 gb_off    = SGBPackLE32(f + 0x18);
++    const uint32 gb_size   = SGBPackLE32(f + 0x1c);
++    const uint32 boot_off  = SGBPackLE32(f + 0x20);
++    const uint32 boot_size = SGBPackLE32(f + 0x24);
++    const uint32 data_end  = size - footer_size;
++
++    if (sgb_off != 0 ||
++        (uint64) sgb_off + sgb_size != gb_off ||
++        (uint64) gb_off + gb_size != boot_off ||
++        (uint64) boot_off + boot_size != data_end ||
++        boot_size != 256)
++        return -1;
++
++    if ((uint64) sgb_off + sgb_size > data_end ||
++        (uint64) gb_off + gb_size > data_end ||
++        (uint64) boot_off + boot_size > data_end)
++        return -1;
++
++    if (SGBPackCRC32(data + sgb_off, sgb_size) != SGBPackLE32(f + 0x28) ||
++        SGBPackCRC32(data + gb_off, gb_size) != SGBPackLE32(f + 0x2c) ||
++        SGBPackCRC32(data + boot_off, boot_size) != SGBPackLE32(f + 0x30) ||
++        SGBPackCRC32(data, data_end) != SGBPackLE32(f + 0xa8))
++        return -1;
++
++    uint8 mode = 0;
++    if (!S9xIsSGBBIOSImage(data + sgb_off, sgb_size, &mode) ||
++        (mode != 1 && mode != 2))
++        return -1;
++
++    std::vector<uint8> boot(data + boot_off, data + boot_off + boot_size);
++    if (!IsSGBBootROM(boot))
++        return -1;
++
++    if (gb_size < 0x150)
++        return -1;
++
++    v.sgb       = data + sgb_off;
++    v.sgb_size  = sgb_size;
++    v.gb        = data + gb_off;
++    v.gb_size   = gb_size;
++    v.boot      = data + boot_off;
++    v.boot_size = boot_size;
++    return 1;
++}
++
++} // anonymous namespace
++
++int CMemory::LoadSGBPackFromBytes(const uint8 *data, uint32 size, const char *pack_path)
++{
++    SGBPackView p = {};
++    const int parsed = ParseSGBPack1(data, size, p);
++    if (parsed <= 0)
++        return parsed;
++
++    std::vector<uint8> sgb (p.sgb,  p.sgb  + p.sgb_size);
++    std::vector<uint8> gb  (p.gb,   p.gb   + p.gb_size);
++    std::vector<uint8> boot(p.boot, p.boot + p.boot_size);
++
++    uint8 mode = 1;
++    if (!S9xIsSGBBIOSImage(sgb.data(), (uint32) sgb.size(), &mode))
++        return -1;
++
++    S9xDeleteCheats();
++    if (Settings.SuperGameBoy || Settings.SGB_BIOSModeActive)
++    {
++        S9xSGBDeinit();
++        Settings.SuperGameBoy       = FALSE;
++        Settings.SGB_BIOSModeActive = FALSE;
++    }
++
++    if (!S9xSGBInit())
++        return -1;
++    if (!S9xSGBLoadBootROMBytes(boot.data(), boot.size()))
++    {
++        S9xSGBDeinit();
++        return -1;
++    }
++    if (!S9xSGBLoadROMBytes(gb.data(), gb.size(), pack_path))
++    {
++        S9xSGBDeinit();
++        return -1;
++    }
++
++    S9xSGBPrepareBiosCart();
++    S9xSGBSetAudioRate(Settings.SoundPlaybackRate);
++
++    if (!LoadROMMem(sgb.data(), (uint32) sgb.size(), pack_path))
++    {
++        S9xSGBDeinit();
++        return -1;
++    }
++
++    Settings.SGB_BIOSModeActive = TRUE;
++    Settings.GameBoyRunMode     = mode;
++    Settings.GBClockMultiplier  = 1.0f;
++    S9xSGBSetRunMode(mode);
++
++    if (pack_path && *pack_path)
++    {
++        strncpy(Settings.GBRomPath, pack_path, sizeof Settings.GBRomPath - 1);
++        Settings.GBRomPath[sizeof Settings.GBRomPath - 1] = '\0';
++        strncpy(Settings.SGB_BIOSPath, pack_path, sizeof Settings.SGB_BIOSPath - 1);
++        Settings.SGB_BIOSPath[sizeof Settings.SGB_BIOSPath - 1] = '\0';
++        ROMFilename = pack_path;
++    }
++    else
++    {
++        Settings.GBRomPath[0] = '\0';
++        Settings.SGB_BIOSPath[0] = '\0';
++        ROMFilename = "SGBPACK";
++    }
++
++    S9xInitCheatData();
++    if (Settings.ApplyCheats)
++        S9xCheatsEnable();
++    if (pack_path && *pack_path)
++        S9xLoadCheatFile(S9xGetFilename(".cht", CHEAT_DIR).c_str());
++
++    S9xMessage(S9X_INFO, S9X_ROM_INFO, "Loaded SGBPACK1 single-file Super Game Boy image.");
++    return 1;
++}
