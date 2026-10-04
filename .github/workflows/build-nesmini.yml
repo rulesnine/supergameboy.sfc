@@ -29,17 +29,55 @@ jobs:
           submodules: false
           path: supersnes9x
 
-      - name: Install ARMv7 cross compiler
+      - name: Install host build tools
         run: |
           set -e
           sudo apt-get update
-          sudo apt-get install -y \
-            gcc-arm-linux-gnueabihf \
-            g++-arm-linux-gnueabihf \
-            binutils-arm-linux-gnueabihf \
-            make \
-            bc \
-            file
+          sudo apt-get install -y wget xz-utils make bc file dpkg-dev
+
+      - name: Prepare GCC 7 ARMhf and GLIBC 2.23 sysroot
+        run: |
+          set -e
+          TOOLCHAIN_URL="https://releases.linaro.org/components/toolchain/binaries/7.5-2019.12/arm-linux-gnueabihf/gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabihf.tar.xz"
+          mkdir -p "$GITHUB_WORKSPACE/toolchain" "$GITHUB_WORKSPACE/xenial-debs" "$GITHUB_WORKSPACE/xenial-sysroot"
+          wget -q --show-progress "$TOOLCHAIN_URL" -O "$RUNNER_TEMP/linaro.tar.xz"
+          tar -xJf "$RUNNER_TEMP/linaro.tar.xz" --strip-components=1 -C "$GITHUB_WORKSPACE/toolchain"
+
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/xenial-debs:/out" \
+            ubuntu:16.04 bash -ec '
+              printf "%s\n" \
+                "deb [arch=armhf] http://old-releases.ubuntu.com/ubuntu xenial main universe" \
+                "deb [arch=armhf] http://old-releases.ubuntu.com/ubuntu xenial-updates main universe" \
+                "deb [arch=armhf] http://old-releases.ubuntu.com/ubuntu xenial-security main universe" \
+                > /etc/apt/sources.list
+              apt-get update
+              cd /out
+              apt-get download libc6:armhf libc6-dev:armhf linux-libc-dev:armhf
+            '
+
+          for pkg in "$GITHUB_WORKSPACE"/xenial-debs/*.deb; do
+            dpkg-deb -x "$pkg" "$GITHUB_WORKSPACE/xenial-sysroot"
+          done
+
+          test -e "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6"
+          test -e "$GITHUB_WORKSPACE/xenial-sysroot/usr/include/stdio.h"
+          strings "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6" \
+            | grep -q "GLIBC_2.23"
+
+          mkdir -p "$GITHUB_WORKSPACE/wrappers"
+          cat > "$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc" <<'EOF'
+          #!/bin/sh
+          exec "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc" --sysroot="$GITHUB_WORKSPACE/xenial-sysroot" "$@"
+          EOF
+          cat > "$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++" <<'EOF'
+          #!/bin/sh
+          exec "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-g++" --sysroot="$GITHUB_WORKSPACE/xenial-sysroot" -std=gnu++17 "$@"
+          EOF
+          chmod +x "$GITHUB_WORKSPACE"/wrappers/*
+
+          "$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc" -dumpversion
+          "$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++" -dumpversion
 
       - name: Apply SGBPACK integration
         shell: pwsh
@@ -54,45 +92,56 @@ jobs:
             exit 1
           }
 
-      - name: Build classic ARMv7 Cortex-A7 core
+      - name: Build NES Mini core against GLIBC 2.23
         working-directory: supersnes9x/libretro
         run: |
           set -e
           make clean || true
           make -j2 \
             platform=classic_armv7_a7 \
-            CC=arm-linux-gnueabihf-gcc \
-            CXX=arm-linux-gnueabihf-g++ \
-            AR=arm-linux-gnueabihf-ar \
-            STRIP=arm-linux-gnueabihf-strip \
+            CC="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc" \
+            CXX="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++" \
+            AR="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar" \
+            STRIP="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-strip" \
             HAVE_UNZIP=0
 
-      - name: Verify NES Mini binary
+      - name: Verify NES Mini ABI and GLIBC floor
         working-directory: supersnes9x/libretro
         run: |
           set -e
+          READELF="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf"
           CORE=supersnes9x_libretro.so
           test -f "$CORE"
-          echo "=== file ===" | tee verify-nesmini.txt
-          file "$CORE" | tee -a verify-nesmini.txt
-          echo "=== ELF header ===" | tee -a verify-nesmini.txt
-          arm-linux-gnueabihf-readelf -h "$CORE" | tee -a verify-nesmini.txt
-          echo "=== ARM attributes ===" | tee -a verify-nesmini.txt
-          arm-linux-gnueabihf-readelf -A "$CORE" | tee -a verify-nesmini.txt
-          echo "=== dynamic dependencies ===" | tee -a verify-nesmini.txt
-          arm-linux-gnueabihf-readelf -d "$CORE" | tee -a verify-nesmini.txt
-          echo "=== symbol version requirements ===" | tee -a verify-nesmini.txt
-          arm-linux-gnueabihf-readelf -V "$CORE" | tee -a verify-nesmini.txt
+
+          {
+            echo "=== file ==="
+            file "$CORE"
+            echo "=== ELF header ==="
+            "$READELF" -h "$CORE"
+            echo "=== ARM attributes ==="
+            "$READELF" -A "$CORE"
+            echo "=== dynamic dependencies ==="
+            "$READELF" -d "$CORE"
+            echo "=== symbol version requirements ==="
+            "$READELF" -V "$CORE"
+          } | tee verify-nesmini.txt
 
           file "$CORE" | grep -q "ELF 32-bit"
-          arm-linux-gnueabihf-readelf -h "$CORE" | grep -q "Machine:.*ARM"
-          arm-linux-gnueabihf-readelf -A "$CORE" | grep -q "Tag_ABI_VFP_args: VFP registers"
+          "$READELF" -h "$CORE" | grep -q "Machine:.*ARM"
+          "$READELF" -h "$CORE" | grep -q "hard-float ABI"
+          "$READELF" -A "$CORE" | grep -q "Tag_ABI_VFP_args: VFP registers"
+
+          if "$READELF" -V "$CORE" | grep -Eq 'GLIBC_2\.(2[4-9]|[3-9][0-9])'; then
+            echo "ERROR: core requires GLIBC newer than 2.23"
+            "$READELF" -V "$CORE" | grep -E 'GLIBC_2\.'
+            exit 1
+          fi
 
       - name: Strip and package
         working-directory: supersnes9x/libretro
         run: |
           set -e
-          arm-linux-gnueabihf-strip --strip-unneeded supersnes9x_libretro.so
+          "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-strip" --strip-unneeded supersnes9x_libretro.so
           mkdir -p ../../dist-nesmini
           cp supersnes9x_libretro.so ../../dist-nesmini/supersnes9x_sgbpack_libretro.so
           cp verify-nesmini.txt ../../dist-nesmini/
@@ -101,6 +150,6 @@ jobs:
       - name: Upload NES Mini ARMv7 build
         uses: actions/upload-artifact@v4
         with:
-          name: SuperSnes9x-SGBPACK-NESMini-ARMv7
+          name: SuperSnes9x-SGBPACK-NESMini-ARMv7-GLIBC223
           path: dist-nesmini
           retention-days: 30
