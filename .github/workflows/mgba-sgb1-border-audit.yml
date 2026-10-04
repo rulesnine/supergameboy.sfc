@@ -1,4 +1,4 @@
-name: mGBA SGB1 Border Audit
+name: mGBA SGB1 Border Build
 
 on:
   push:
@@ -6,17 +6,27 @@ on:
       - mgba-sgb1-border-build
 
 jobs:
-  audit:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: Prepare source image and audit tile budget
-        shell: bash
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf cmake ninja-build python3-pil git
+
+      - name: Fetch mGBA and authentic SGB1 frame
         run: |
           set -euxo pipefail
-          python3 -m pip install --quiet pillow
+          git clone --depth 1 https://github.com/mgba-emu/mgba.git
           curl -L --fail --retry 3 'https://www.mariowiki.com/images/1/13/SGB_Boot_Screen.gif' -o sgb_boot.gif
+
+      - name: Replace mGBA generic border with authentic SGB1 border
+        run: |
           python3 - <<'PY'
           from PIL import Image
+          import re
+          from pathlib import Path
+
           im=Image.open('sgb_boot.gif')
           frames=[]
           try:
@@ -25,61 +35,133 @@ jobs:
                   im.seek(im.tell()+1)
           except EOFError:
               pass
-          print('frames', len(frames))
-          # Save contact sheet for visual verification.
-          thumbs=[]
-          for f in frames:
-              t=f.copy()
-              t.thumbnail((128,112), Image.Resampling.NEAREST)
-              thumbs.append(t)
-          cols=6
-          rows=(len(thumbs)+cols-1)//cols
-          sheet=Image.new('RGB',(cols*128,rows*112),(0,0,0))
-          for i,t in enumerate(thumbs):
-              sheet.paste(t,((i%cols)*128,(i//cols)*112))
-          sheet.save('sgb_boot_contact.png')
-
-          # Outer SGB hardware frame is constant through boot; use final frame.
           src=frames[-1].copy()
-          # Blank only the Game Boy viewport. mGBA will render GB video here.
+          # Game Boy viewport: leave black in border data; emulator overlays game here.
           for y in range(40,184):
               for x in range(48,208):
                   src.putpixel((x,y),(0,0,0))
           src.save('sgb1_border_source.png')
 
-          # Quantize to the single 16-color border palette used by mGBA's default border.
-          q=src.quantize(colors=16, method=Image.Quantize.MAXCOVERAGE, dither=Image.Dither.NONE)
-          q.convert('RGB').save('sgb1_border_quantized.png')
-          pix=q.load()
-          # Deduplicate 8x8 tiles allowing H/V flips, matching mGBA's generator.
-          def tile(x0,y0):
-              return tuple(pix[x0+x,y0+y] for y in range(8) for x in range(8))
-          def hflip(t):
-              return tuple(t[y*8+(7-x)] for y in range(8) for x in range(8))
-          def vflip(t):
-              return tuple(t[(7-y)*8+x] for y in range(8) for x in range(8))
-          tiles=[tuple([0]*64)]
+          # Preserve exact GIF colors when possible. The hardware frame uses <=16 colors.
+          colors=src.getcolors(maxcolors=256*224)
+          if colors and len(colors) <= 16:
+              # deterministic palette indexed by first occurrence
+              palette=[]
+              index={}
+              data=[]
+              for y in range(224):
+                  for x in range(256):
+                      c=src.getpixel((x,y))
+                      if c not in index:
+                          index[c]=len(palette); palette.append(c)
+                      data.append(index[c])
+          else:
+              q=src.quantize(colors=16, method=Image.Quantize.MAXCOVERAGE, dither=Image.Dither.NONE)
+              palraw=q.getpalette()
+              palette=[tuple(palraw[i*3:i*3+3]) for i in range(16)]
+              data=list(q.getdata())
+          while len(palette)<16: palette.append((0,0,0))
+
+          def p(x,y): return data[y*256+x]
+          def tile(tx,ty):
+              return tuple(p(tx*8+x,ty*8+y) for y in range(8) for x in range(8))
+          def hflip(t): return tuple(t[y*8+(7-x)] for y in range(8) for x in range(8))
+          def vflip(t): return tuple(t[(7-y)*8+x] for y in range(8) for x in range(8))
+
+          blank=tuple([index.get((0,0,0),0)]*64)
+          tiles=[blank]
+          tilemap=[]
+          X=0x4000; Y=0x8000; PAL=0x1000
           for ty in range(28):
               for tx in range(32):
-                  t=tile(tx*8,ty*8)
-                  variants=(t,vflip(t),hflip(t),hflip(vflip(t)))
-                  found=False
-                  for v in variants:
-                      if v in tiles:
-                          found=True; break
-                  if not found:
-                      tiles.append(t)
-          with open('stats.txt','w') as f:
-              f.write(f'frames={len(frames)}\n')
-              f.write(f'unique_tiles_with_flips={len(tiles)}\n')
-              f.write('mgba_current_default_tile_capacity=54\n')
-          print(open('stats.txt').read())
+                  t=tile(tx,ty)
+                  variants=[(t,0),(vflip(t),Y),(hflip(t),X),(hflip(vflip(t)),X|Y)]
+                  found=None
+                  for v,flags in variants:
+                      try:
+                          found=(tiles.index(v),flags); break
+                      except ValueError:
+                          pass
+                  if found is None:
+                      tiles.append(t); found=(len(tiles)-1,0)
+                  idx,flags=found
+                  if idx>255:
+                      raise SystemExit(f'too many SGB tiles: {idx+1}')
+                  tilemap.append(idx|PAL|flags)
+
+          # SNES 4bpp planar tile encoding.
+          chardata=bytearray(len(tiles)*32)
+          for i,t in enumerate(tiles):
+              for y in range(8):
+                  planes=[0,0,0,0]
+                  for x in range(8):
+                      v=t[y*8+x] & 15
+                      for b in range(4):
+                          planes[b] |= ((v>>b)&1) << (7-x)
+                  base=i*32+y*2
+                  chardata[base+0]=planes[0]
+                  chardata[base+1]=planes[1]
+                  chardata[base+16]=planes[2]
+                  chardata[base+17]=planes[3]
+
+          tilebytes=bytearray()
+          for v in tilemap:
+              tilebytes += bytes((v&255,(v>>8)&255))
+
+          def snes15(c):
+              r,g,b=c
+              return ((r>>3)&31) | (((g>>3)&31)<<5) | (((b>>3)&31)<<10)
+          palvals=[snes15(c) for c in palette[:16]]
+
+          def fmt8(bs):
+              return '\n'.join('\t'+', '.join(f'0x{x:02X}' for x in bs[i:i+16])+',' for i in range(0,len(bs),16))
+          def fmt16(vs):
+              return '\n'.join('\t'+', '.join(f'0x{x:04X}' for x in vs[i:i+8])+',' for i in range(0,len(vs),8))
+
+          path=Path('mgba/src/gb/video.c')
+          s=path.read_text()
+          def replace(name, body):
+              nonlocal_s=None
+              pattern=rf'(static const (?:uint8_t|uint16_t) {re.escape(name)}\[\] = \{{)[\s\S]*?(\n\}};)'
+              out,n=re.subn(pattern,lambda m:m.group(1)+'\n'+body+m.group(2),s,count=1)
+              if n!=1: raise SystemExit(f'failed to replace {name}: {n}')
+              return out
+          s=replace('_defaultBorderPalette',fmt16(palvals))
+          # second and third replacements operate on updated string
+          pattern=rf'(static const uint8_t _defaultBorderTilemap\[\] = \{{)[\s\S]*?(\n\}};)'
+          s,n=re.subn(pattern,lambda m:m.group(1)+'\n'+fmt8(tilebytes)+m.group(2),s,count=1)
+          if n!=1: raise SystemExit('failed tilemap replace')
+          pattern=rf'(static const uint8_t _defaultBorderChardata\[\] = \{{)[\s\S]*?(\n\}};)'
+          s,n=re.subn(pattern,lambda m:m.group(1)+'\n'+fmt8(chardata)+m.group(2),s,count=1)
+          if n!=1: raise SystemExit('failed chardata replace')
+          path.write_text(s)
+
+          Path('border_stats.txt').write_text(
+              f'boot_frames={len(frames)}\ncolors={len(palette[:16])}\nunique_tiles={len(tiles)}\nchardata_bytes={len(chardata)}\ntilemap_bytes={len(tilebytes)}\n'
+          )
+          print(Path('border_stats.txt').read_text())
           PY
+
+      - name: Configure ARMv7 hard-float libretro build
+        run: |
+          set -euxo pipefail
+          cmake -S mgba -B build -G Ninja             -DCMAKE_SYSTEM_NAME=Linux             -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc             -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++             -DCMAKE_C_FLAGS='-march=armv7-a -mfpu=neon -mfloat-abi=hard -O3'             -DCMAKE_CXX_FLAGS='-march=armv7-a -mfpu=neon -mfloat-abi=hard -O3'             -DBUILD_LIBRETRO=ON             -DBUILD_QT=OFF             -DBUILD_SDL=OFF             -DBUILD_GL=OFF             -DBUILD_GLES2=OFF             -DBUILD_GLES3=OFF             -DUSE_FFMPEG=OFF             -DUSE_LIBZIP=OFF             -DUSE_SQLITE3=OFF             -DUSE_LZMA=OFF             -DUSE_ZLIB=OFF
+
+      - name: Build
+        run: |
+          cmake --build build --parallel 2
+          find build -type f -name '*libretro*.so' -o -name 'mgba_libretro.so'
+          CORE="$(find build -type f -name 'mgba_libretro.so' | head -n1)"
+          test -n "$CORE"
+          cp "$CORE" mgba_sgb1_libretro.so
+          file mgba_sgb1_libretro.so
+          arm-linux-gnueabihf-readelf -h mgba_sgb1_libretro.so
+          arm-linux-gnueabihf-readelf -V mgba_sgb1_libretro.so || true
+
       - uses: actions/upload-artifact@v4
         with:
-          name: sgb1-border-audit
+          name: mgba-sgb1-border-armv7
           path: |
-            sgb_boot_contact.png
+            mgba_sgb1_libretro.so
             sgb1_border_source.png
-            sgb1_border_quantized.png
-            stats.txt
+            border_stats.txt
