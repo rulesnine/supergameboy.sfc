@@ -122,16 +122,16 @@ jobs:
           s=path.read_text()
           def replace(name, body):
               nonlocal_s=None
-              pattern=rf'(static const (?:uint8_t|uint16_t) {re.escape(name)}\[\] = \{{)[\s\S]*?(\n\}};)'
+              pattern=rf'(static const (?:uint8_t|uint16_t) {re.escape(name)}\[[^\]]*\] = \{{)[\s\S]*?(\n\}};)'
               out,n=re.subn(pattern,lambda m:m.group(1)+'\n'+body+m.group(2),s,count=1)
               if n!=1: raise SystemExit(f'failed to replace {name}: {n}')
               return out
           s=replace('_defaultBorderPalette',fmt16(palvals))
           # second and third replacements operate on updated string
-          pattern=rf'(static const uint8_t _defaultBorderTilemap\[\] = \{{)[\s\S]*?(\n\}};)'
+          pattern=rf'(static const uint8_t _defaultBorderTilemap\[[^\]]*\] = \{{)[\s\S]*?(\n\}};)'
           s,n=re.subn(pattern,lambda m:m.group(1)+'\n'+fmt8(tilebytes)+m.group(2),s,count=1)
           if n!=1: raise SystemExit('failed tilemap replace')
-          pattern=rf'(static const uint8_t _defaultBorderChardata\[\] = \{{)[\s\S]*?(\n\}};)'
+          pattern=rf'(static const uint8_t _defaultBorderChardata\[[^\]]*\] = \{{)[\s\S]*?(\n\}};)'
           s,n=re.subn(pattern,lambda m:m.group(1)+'\n'+fmt8(chardata)+m.group(2),s,count=1)
           if n!=1: raise SystemExit('failed chardata replace')
           path.write_text(s)
