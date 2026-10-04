@@ -40,12 +40,27 @@ def main():
 
     pal = unpack(PAL_Z)
     tm = unpack(TILEMAP_Z)
-    char = unpack(CHARDATA_Z)
+    char = bytearray(unpack(CHARDATA_Z))
     if (len(pal), len(tm), len(char)) != (32, 1792, 2592):
         raise SystemExit(f"ERROR: bad embedded data lengths: {len(pal)}, {len(tm)}, {len(char)}")
 
+    # SGB1_TOP_EDGE_FIXED_BLACK:
+    # Tile 11 is used only across the 20 tiles immediately above the
+    # 160x144 Game Boy viewport. Its last pixel row was color index 0.
+    # mGBA intentionally substitutes SGB border color-0 with the current
+    # GB palette color-0, which turns that row white on TAKARA's boot screen.
+    # Remap only this row to palette index 13, which is also 0x0000 black,
+    # but is not dynamically substituted. Geometry and all other art stay intact.
+    tile = 11
+    y = 7
+    off = tile * 32 + y * 2
+    char[off + 0] = 0xFF  # plane 0
+    char[off + 1] = 0x00  # plane 1
+    char[off + 16] = 0xFF # plane 2
+    char[off + 17] = 0xFF # plane 3  => color 13 (1101b) across all 8 pixels
+
     palette = (
-        "/* ORIGINAL_SGB1_HOST_BORDER: exact 256x224 Super Game Boy 1 host frame */\n"
+        "/* ORIGINAL_SGB1_HOST_BORDER V3: 256x224 host frame + fixed top-edge color */\n"
         "static const uint16_t _defaultBorderPalette[16] = {\n"
         + fmt_u16le(pal) + "\n};"
     )
