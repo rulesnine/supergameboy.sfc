@@ -35,13 +35,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y wget xz-utils make bc file dpkg-dev
 
-      - name: Prepare GCC 7 ARMhf and GLIBC 2.23 sysroot
+      - name: Checkout Linaro GCC 7 ARMhf toolchain
+        uses: actions/checkout@v4
+        with:
+          repository: MayuriLabs/linaro_arm-linux-gnueabihf-7.5
+          ref: master
+          path: toolchain
+          fetch-depth: 1
+
+      - name: Prepare GLIBC 2.23 sysroot
         run: |
           set -e
-          TOOLCHAIN_URL="https://releases.linaro.org/components/toolchain/binaries/7.5-2019.12/arm-linux-gnueabihf/gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabihf.tar.xz"
-          mkdir -p "$GITHUB_WORKSPACE/toolchain" "$GITHUB_WORKSPACE/xenial-debs" "$GITHUB_WORKSPACE/xenial-sysroot"
-          wget -q --show-progress "$TOOLCHAIN_URL" -O "$RUNNER_TEMP/linaro.tar.xz"
-          tar -xJf "$RUNNER_TEMP/linaro.tar.xz" --strip-components=1 -C "$GITHUB_WORKSPACE/toolchain"
+          mkdir -p "$GITHUB_WORKSPACE/xenial-debs" "$GITHUB_WORKSPACE/xenial-sysroot"
 
           docker run --rm \
             -v "$GITHUB_WORKSPACE/xenial-debs:/out" \
