@@ -29,10 +29,21 @@ jobs:
           submodules: false
           path: supersnes9x
 
-      - name: Install ARMv7 cross compiler
+      - name: Install ARMv7 cross compiler and ARMhf zlib
         run: |
+          set -e
+          sudo dpkg --add-architecture armhf
           sudo apt-get update
-          sudo apt-get install -y             gcc-arm-linux-gnueabihf             g++-arm-linux-gnueabihf             binutils-arm-linux-gnueabihf             make bc file
+          sudo apt-get install -y \
+            gcc-arm-linux-gnueabihf \
+            g++-arm-linux-gnueabihf \
+            binutils-arm-linux-gnueabihf \
+            zlib1g-dev:armhf \
+            make \
+            bc \
+            file
+          arm-linux-gnueabihf-gcc -print-sysroot
+          dpkg -L zlib1g-dev:armhf | grep -E 'libz\.(so|a)$' || true
 
       - name: Apply SGBPACK integration
         shell: pwsh
@@ -50,8 +61,15 @@ jobs:
       - name: Build classic ARMv7 Cortex-A7 core
         working-directory: supersnes9x/libretro
         run: |
+          set -e
           make clean || true
-          make -j2             platform=classic_armv7_a7             CC=arm-linux-gnueabihf-gcc             CXX=arm-linux-gnueabihf-g++             AR=arm-linux-gnueabihf-ar             STRIP=arm-linux-gnueabihf-strip
+          make -j2 \
+            platform=classic_armv7_a7 \
+            CC=arm-linux-gnueabihf-gcc \
+            CXX=arm-linux-gnueabihf-g++ \
+            AR=arm-linux-gnueabihf-ar \
+            STRIP=arm-linux-gnueabihf-strip \
+            LDFLAGS+="-L/usr/lib/arm-linux-gnueabihf"
 
       - name: Verify NES Mini binary
         working-directory: supersnes9x/libretro
@@ -77,11 +95,12 @@ jobs:
       - name: Strip and package
         working-directory: supersnes9x/libretro
         run: |
+          set -e
           arm-linux-gnueabihf-strip --strip-unneeded supersnes9x_libretro.so
           mkdir -p ../../dist-nesmini
           cp supersnes9x_libretro.so ../../dist-nesmini/supersnes9x_sgbpack_libretro.so
           cp verify-nesmini.txt ../../dist-nesmini/
-          sha256sum ../../dist-nesmini/supersnes9x_sgbpack_libretro.so             > ../../dist-nesmini/SHA256.txt
+          sha256sum ../../dist-nesmini/supersnes9x_sgbpack_libretro.so > ../../dist-nesmini/SHA256.txt
 
       - name: Upload NES Mini ARMv7 build
         uses: actions/upload-artifact@v4
