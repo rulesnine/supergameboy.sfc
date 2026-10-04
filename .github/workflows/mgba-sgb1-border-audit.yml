@@ -1,0 +1,85 @@
+name: mGBA SGB1 Border Audit
+
+on:
+  push:
+    branches:
+      - mgba-sgb1-border-build
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare source image and audit tile budget
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m pip install --quiet pillow
+          curl -L --fail --retry 3 'https://www.mariowiki.com/images/1/13/SGB_Boot_Screen.gif' -o sgb_boot.gif
+          python3 - <<'PY'
+          from PIL import Image
+          im=Image.open('sgb_boot.gif')
+          frames=[]
+          try:
+              while True:
+                  frames.append(im.convert('RGB').copy())
+                  im.seek(im.tell()+1)
+          except EOFError:
+              pass
+          print('frames', len(frames))
+          # Save contact sheet for visual verification.
+          thumbs=[]
+          for f in frames:
+              t=f.copy()
+              t.thumbnail((128,112), Image.Resampling.NEAREST)
+              thumbs.append(t)
+          cols=6
+          rows=(len(thumbs)+cols-1)//cols
+          sheet=Image.new('RGB',(cols*128,rows*112),(0,0,0))
+          for i,t in enumerate(thumbs):
+              sheet.paste(t,((i%cols)*128,(i//cols)*112))
+          sheet.save('sgb_boot_contact.png')
+
+          # Outer SGB hardware frame is constant through boot; use final frame.
+          src=frames[-1].copy()
+          # Blank only the Game Boy viewport. mGBA will render GB video here.
+          for y in range(40,184):
+              for x in range(48,208):
+                  src.putpixel((x,y),(0,0,0))
+          src.save('sgb1_border_source.png')
+
+          # Quantize to the single 16-color border palette used by mGBA's default border.
+          q=src.quantize(colors=16, method=Image.Quantize.MAXCOVERAGE, dither=Image.Dither.NONE)
+          q.convert('RGB').save('sgb1_border_quantized.png')
+          pix=q.load()
+          # Deduplicate 8x8 tiles allowing H/V flips, matching mGBA's generator.
+          def tile(x0,y0):
+              return tuple(pix[x0+x,y0+y] for y in range(8) for x in range(8))
+          def hflip(t):
+              return tuple(t[y*8+(7-x)] for y in range(8) for x in range(8))
+          def vflip(t):
+              return tuple(t[(7-y)*8+x] for y in range(8) for x in range(8))
+          tiles=[tuple([0]*64)]
+          for ty in range(28):
+              for tx in range(32):
+                  t=tile(tx*8,ty*8)
+                  variants=(t,vflip(t),hflip(t),hflip(vflip(t)))
+                  found=False
+                  for v in variants:
+                      if v in tiles:
+                          found=True; break
+                  if not found:
+                      tiles.append(t)
+          with open('stats.txt','w') as f:
+              f.write(f'frames={len(frames)}\n')
+              f.write(f'unique_tiles_with_flips={len(tiles)}\n')
+              f.write('mgba_current_default_tile_capacity=54\n')
+          print(open('stats.txt').read())
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sgb1-border-audit
+          path: |
+            sgb_boot_contact.png
+            sgb1_border_source.png
+            sgb1_border_quantized.png
+            stats.txt
