@@ -1,6 +1,6 @@
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 MMH = ROOT / "supersnes9x" / "memmap.h"
 MMC = ROOT / "supersnes9x" / "memmap.cpp"
 
