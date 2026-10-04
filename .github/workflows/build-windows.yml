@@ -35,9 +35,16 @@ jobs:
         shell: pwsh
         run: |
           python sgbpack-project/tools/apply_sgbpack.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Set-Location supersnes9x
           git diff --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git diff --stat
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Select-String -Path "memmap.cpp" -Pattern "Loaded SGBPACK1 single-file Super Game Boy image." -Quiet)) {
+            Write-Error "SGBPACK integration marker missing from memmap.cpp"
+            exit 1
+          }
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
