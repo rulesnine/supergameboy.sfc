@@ -1,0 +1,91 @@
+name: Build NES Mini ARMv7 SGBPACK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - "tools/**"
+      - ".github/workflows/build-nesmini.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  nesmini-armv7:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout SGBPACK project
+        uses: actions/checkout@v4
+        with:
+          path: sgbpack-project
+
+      - name: Checkout pinned SuperSnes9x
+        uses: actions/checkout@v4
+        with:
+          repository: shanytc/snes9x
+          ref: 183e03e5efed3b6d450385c98e2ccffb194153c3
+          submodules: false
+          path: supersnes9x
+
+      - name: Install ARMv7 cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y             gcc-arm-linux-gnueabihf             g++-arm-linux-gnueabihf             binutils-arm-linux-gnueabihf             make bc file
+
+      - name: Apply SGBPACK integration
+        shell: pwsh
+        run: |
+          python sgbpack-project/tools/apply_sgbpack.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Set-Location supersnes9x
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Select-String -Path "memmap.cpp" -Pattern "Loaded SGBPACK1 single-file Super Game Boy image." -Quiet)) {
+            Write-Error "SGBPACK integration marker missing from memmap.cpp"
+            exit 1
+          }
+
+      - name: Build classic ARMv7 Cortex-A7 core
+        working-directory: supersnes9x/libretro
+        run: |
+          make clean || true
+          make -j2             platform=classic_armv7_a7             CC=arm-linux-gnueabihf-gcc             CXX=arm-linux-gnueabihf-g++             AR=arm-linux-gnueabihf-ar             STRIP=arm-linux-gnueabihf-strip
+
+      - name: Verify NES Mini binary
+        working-directory: supersnes9x/libretro
+        run: |
+          set -e
+          CORE=supersnes9x_libretro.so
+          test -f "$CORE"
+          echo "=== file ===" | tee verify-nesmini.txt
+          file "$CORE" | tee -a verify-nesmini.txt
+          echo "=== ELF header ===" | tee -a verify-nesmini.txt
+          arm-linux-gnueabihf-readelf -h "$CORE" | tee -a verify-nesmini.txt
+          echo "=== ARM attributes ===" | tee -a verify-nesmini.txt
+          arm-linux-gnueabihf-readelf -A "$CORE" | tee -a verify-nesmini.txt
+          echo "=== dynamic dependencies ===" | tee -a verify-nesmini.txt
+          arm-linux-gnueabihf-readelf -d "$CORE" | tee -a verify-nesmini.txt
+          echo "=== symbol version requirements ===" | tee -a verify-nesmini.txt
+          arm-linux-gnueabihf-readelf -V "$CORE" | tee -a verify-nesmini.txt
+
+          file "$CORE" | grep -q "ELF 32-bit"
+          arm-linux-gnueabihf-readelf -h "$CORE" | grep -q "Machine:.*ARM"
+          arm-linux-gnueabihf-readelf -A "$CORE" | grep -q "Tag_ABI_VFP_args: VFP registers"
+
+      - name: Strip and package
+        working-directory: supersnes9x/libretro
+        run: |
+          arm-linux-gnueabihf-strip --strip-unneeded supersnes9x_libretro.so
+          mkdir -p ../../dist-nesmini
+          cp supersnes9x_libretro.so ../../dist-nesmini/supersnes9x_sgbpack_libretro.so
+          cp verify-nesmini.txt ../../dist-nesmini/
+          sha256sum ../../dist-nesmini/supersnes9x_sgbpack_libretro.so             > ../../dist-nesmini/SHA256.txt
+
+      - name: Upload NES Mini ARMv7 build
+        uses: actions/upload-artifact@v4
+        with:
+          name: SuperSnes9x-SGBPACK-NESMini-ARMv7
+          path: dist-nesmini
+          retention-days: 30
