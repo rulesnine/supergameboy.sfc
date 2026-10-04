@@ -5,6 +5,7 @@ on:
   push:
     branches: [ main ]
     paths:
+      - "tools/**"
       - "patches/**"
       - ".github/workflows/build-windows.yml"
       - "README.md"
@@ -30,12 +31,11 @@ jobs:
           submodules: recursive
           path: supersnes9x
 
-      - name: Apply SGBPACK patch
-        shell: bash
+      - name: Apply SGBPACK integration
+        shell: pwsh
         run: |
-          cd supersnes9x
-          git apply --check ../sgbpack-project/patches/SuperSnes9x_SGBPACK_v1.patch
-          git apply ../sgbpack-project/patches/SuperSnes9x_SGBPACK_v1.patch
+          python sgbpack-project/tools/apply_sgbpack.py
+          Set-Location supersnes9x
           git diff --check
           git diff --stat
 
