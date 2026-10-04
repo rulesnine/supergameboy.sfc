@@ -1,0 +1,244 @@
+name: Build mGBA SGB1 Border V3 NES Mini
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ mgba-sgb1-border-v3-topline-fix ]
+    paths:
+      - "tools/patch_mgba_sgb1_border.py"
+      - ".github/workflows/build-mgba-sgb1-border.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+        with:
+          path: project
+
+      - name: Checkout exact mGBA source used by working core
+        uses: actions/checkout@v4
+        with:
+          repository: mgba-emu/mgba
+          ref: 6dce57eef127dc4cc292644f38196e0e7c58590c
+          submodules: false
+          path: mgba
+
+      - name: Install host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y make bc file dpkg-dev python3
+
+      - name: Checkout ARM hard-float toolchain
+        uses: actions/checkout@v4
+        with:
+          repository: MayuriLabs/linaro_arm-linux-gnueabihf-7.5
+          ref: master
+          path: toolchain
+          fetch-depth: 1
+
+      - name: Prepare Xenial GLIBC 2.23 ARMhf sysroot
+        run: |
+          set -eux
+          mkdir -p "$GITHUB_WORKSPACE/xenial-debs" "$GITHUB_WORKSPACE/xenial-sysroot"
+
+          docker run --rm             -v "$GITHUB_WORKSPACE/xenial-debs:/out"             ubuntu:16.04 bash -ec '
+              printf "%s\n"                 "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial main universe"                 "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial-updates main universe"                 "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial-security main universe"                 > /etc/apt/sources.list
+              apt-get update
+              cd /out
+              apt-get download libc6:armhf libc6-dev:armhf linux-libc-dev:armhf
+            '
+
+          for pkg in "$GITHUB_WORKSPACE"/xenial-debs/*.deb; do
+            dpkg-deb -x "$pkg" "$GITHUB_WORKSPACE/xenial-sysroot"
+          done
+
+          test -e "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6"
+          test -e "$GITHUB_WORKSPACE/xenial-sysroot/usr/include/stdio.h"
+
+          mkdir -p "$GITHUB_WORKSPACE/wrappers"
+          cat > "$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc" <<'EOF'
+          #!/bin/sh
+          exec "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc" --sysroot="$GITHUB_WORKSPACE/xenial-sysroot" "$@"
+          EOF
+          cat > "$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++" <<'EOF'
+          #!/bin/sh
+          exec "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-g++" --sysroot="$GITHUB_WORKSPACE/xenial-sysroot" "$@"
+          EOF
+          chmod +x "$GITHUB_WORKSPACE"/wrappers/*
+
+          "$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc" -dumpversion
+
+      - name: Integrate original SGB1 host border in source
+        run: |
+          set -eux
+          test "$(git -C mgba rev-parse HEAD)" = "6dce57eef127dc4cc292644f38196e0e7c58590c"
+          python3 project/tools/patch_mgba_sgb1_border.py mgba/src/gb/video.c
+          grep -q "ORIGINAL_SGB1_HOST_BORDER V3" mgba/src/gb/video.c\n          grep -q "SGB1_TOP_EDGE_FIXED_BLACK" project/tools/patch_mgba_sgb1_border.py
+          git -C mgba diff --check
+          git -C mgba diff --stat
+
+      - name: Build libretro core
+        working-directory: mgba
+        run: |
+          set -eux
+          make -f Makefile.libretro clean || true
+          make -f Makefile.libretro -j2             platform=unix-armv7-hardfloat-neon             CC="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc"             CXX="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++"             AR="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar"             LDFLAGS="-static-libgcc" LIBS="$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6"
+
+      - name: Verify core ABI, source revision, and SGB1 data
+        working-directory: mgba
+        run: |
+          set -eux
+          CORE=mgba_libretro.so
+          READELF="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf"
+          NM="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-nm"
+
+          test -f "$CORE"
+
+          {
+            echo "=== file ==="
+            file "$CORE"
+            echo "=== sha256 ==="
+            sha256sum "$CORE"
+            echo "=== ELF header ==="
+            "$READELF" -h "$CORE"
+            echo "=== ARM attributes ==="
+            "$READELF" -A "$CORE"
+            echo "=== dynamic dependencies ==="
+            "$READELF" -d "$CORE"
+            echo "=== version requirements ==="
+            "$READELF" -V "$CORE"
+            echo "=== default SGB border symbols ==="
+            "$NM" -S --size-sort "$CORE" | grep -E '_defaultBorder(Palette|Tilemap|Chardata)'
+            echo "=== embedded mGBA revision ==="
+            strings "$CORE" | grep -E '0\.11-dev|6dce57e' || true
+          } | tee verify-mgba-sgb1.txt
+
+          file "$CORE" | grep -q "ELF 32-bit"
+          "$READELF" -h "$CORE" | grep -q "Machine:.*ARM"
+          "$READELF" -h "$CORE" | grep -q "hard-float ABI"
+          "$READELF" -A "$CORE" | grep -q "Tag_ABI_VFP_args: VFP registers"
+
+          "$NM" -S "$CORE" | grep '_defaultBorderPalette' | grep -qi '00000020'
+          "$NM" -S "$CORE" | grep '_defaultBorderTilemap' | grep -qi '00000700'
+          "$NM" -S "$CORE" | grep '_defaultBorderChardata' | grep -qi '00000a20'
+
+          if "$READELF" -V "$CORE" | grep -Eq 'GLIBC_2\.(2[4-9]|[3-9][0-9])'; then
+            echo "ERROR: core requires GLIBC newer than 2.23"
+            exit 1
+          fi
+
+          if "$READELF" -d "$CORE" | grep -Eq 'Shared library: \[(libstdc\+\+|libgcc_s)'; then
+            echo "ERROR: unexpected libstdc++/libgcc_s dependency"
+            exit 1
+          fi
+
+      - name: Build parallel Hakchi HMOD
+        run: |
+          set -eux
+          OUT="$GITHUB_WORKSPACE/dist"
+          HMOD_DIR="$OUT/hmod"
+          mkdir -p "$HMOD_DIR/bin" "$HMOD_DIR/etc/libretro/core" "$HMOD_DIR/etc/libretro/info"
+
+          cp "$GITHUB_WORKSPACE/mgba/mgba_libretro.so"             "$HMOD_DIR/etc/libretro/core/km_mgba_sgbfix_sgb1v3_libretro.so"
+
+          cat > "$HMOD_DIR/bin/km_mgba_sgbfix_sgb1v3" <<'EOF'
+          #!/bin/sh
+          exec retroarch-clover km_mgba_sgbfix_sgb1v3 "$@"
+          EOF
+          chmod +x "$HMOD_DIR/bin/km_mgba_sgbfix_sgb1v3"
+          chmod +x "$HMOD_DIR/etc/libretro/core/km_mgba_sgbfix_sgb1v3_libretro.so"
+
+          cat > "$HMOD_DIR/etc/libretro/info/km_mgba_sgbfix_sgb1v3_libretro.info" <<'EOF'
+          display_name = "Nintendo - GB/GBC/GBA/SGB (mGBA SGBFIX SGB1 v3)"
+          authors = "endrift|mGBA contributors|rulesnine"
+          supported_extensions = "gb|gbc|gba|sgb"
+          corename = "mGBA"
+          manufacturer = "Nintendo"
+          categories = "Emulator"
+          systemname = "Game Boy/Game Boy Color/Game Boy Advance/Super Game Boy"
+          systemid = "game_boy_advance"
+          database = "Nintendo - Game Boy|Nintendo - Game Boy Color|Nintendo - Game Boy Advance"
+          license = "MPLv2.0"
+          permissions = ""
+          supports_no_game = "false"
+          firmware_count = 4
+          firmware0_desc = "gba_bios.bin (Game Boy Advance BIOS)"
+          firmware0_path = "gba_bios.bin"
+          firmware0_opt = "true"
+          firmware1_desc = "gb_bios.bin (Game Boy BIOS)"
+          firmware1_path = "gb_bios.bin"
+          firmware1_opt = "true"
+          firmware2_desc = "gbc_bios.bin (Game Boy Color BIOS)"
+          firmware2_path = "gbc_bios.bin"
+          firmware2_opt = "true"
+          firmware3_desc = "sgb_bios.bin (Super Game Boy BIOS)"
+          firmware3_path = "sgb_bios.bin"
+          firmware3_opt = "true"
+          notes = "Source rebuild from exact mGBA 6dce57e. Original SGB1 host border integrated without binary insertion."
+          EOF
+
+          cat > "$HMOD_DIR/install" <<'EOF'
+          transfer_default
+          chmod +x $rootfs/bin/*
+          chmod +x $rootfs/usr/bin/*
+          return 1
+          EOF
+          chmod +x "$HMOD_DIR/install"
+
+          cat > "$HMOD_DIR/readme.md" <<'EOF'
+          mGBA SGBFIX SGB1 v3
+          ===================
+
+          Source-safe rebuild for NES Mini / Hakchi.
+
+          V3 change:
+          - Fixes only the white horizontal line above the Game Boy viewport
+            on the TAKARA boot screen.
+          - Tile 11 bottom row is remapped from dynamic border color 0 to
+            fixed black palette index 13 (also 0x0000).
+          - No geometry, scaling, game-border transfer, or SGB behavior changed.
+
+          Base source:
+            mGBA 0.11-dev commit 6dce57eef127dc4cc292644f38196e0e7c58590c
+
+          Changes:
+          - Keeps modern mGBA SGB behavior.
+          - Replaces only mGBA's generic default SGB border data with the
+            original Super Game Boy 1 host frame.
+          - Built from source; no ELF binary expansion/insertion.
+          - Installs in parallel with previous mGBA cores.
+
+          Command:
+            /bin/km_mgba_sgbfix_sgb1v3
+
+          In Hakchi preserve the entire working command line and replace
+          ONLY the executable at the beginning.
+
+          sgb_bios.bin remains optional.
+          EOF
+
+          HMOD="$OUT/_km_mgba_sgbfix_sgb1v3.hmod"
+          tar --owner=0 --group=0 --numeric-owner -C "$HMOD_DIR" -czf "$HMOD" .
+          cp "$GITHUB_WORKSPACE/mgba/verify-mgba-sgb1.txt" "$OUT/"
+          sha256sum "$HMOD" > "$OUT/SHA256.txt"
+          sha256sum "$HMOD_DIR/etc/libretro/core/km_mgba_sgbfix_sgb1v3_libretro.so" >> "$OUT/SHA256.txt"
+
+          tar -tzf "$HMOD"
+          ls -lh "$HMOD" "$HMOD_DIR/etc/libretro/core/km_mgba_sgbfix_sgb1v3_libretro.so"
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: mGBA-SGBFIX-SGB1-v3-NESMini
+          path: |
+            dist/_km_mgba_sgbfix_sgb1v3.hmod
+            dist/SHA256.txt
+            dist/verify-mgba-sgb1.txt
+          retention-days: 30
