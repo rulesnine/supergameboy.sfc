@@ -89,7 +89,7 @@ jobs:
         run: |
           set -eux
           make -f Makefile.libretro clean || true
-          make -f Makefile.libretro -j2             platform=unix-armv7-hardfloat-neon             CC="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc"             CXX="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++"             AR="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar"             LDFLAGS="-static-libgcc"
+          make -f Makefile.libretro -j2             platform=unix-armv7-hardfloat-neon             CC="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc"             CXX="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++"             AR="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar"             LDFLAGS="-static-libgcc" LIBS="$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6"
 
       - name: Verify core ABI, source revision, and SGB1 data
         working-directory: mgba
