@@ -6,7 +6,7 @@ on:
     branches: [ mgba-sgb1-border-v3-topline-fix ]
     paths:
       - "tools/patch_mgba_sgb1_border.py"
-      - ".github/workflows/build-mgba-sgb1-border.yml"
+      - ".github/workflows/build-mgba-sgb1-border-v3.yml"
 
 permissions:
   contents: read
