@@ -29,21 +29,17 @@ jobs:
           submodules: false
           path: supersnes9x
 
-      - name: Install ARMv7 cross compiler and ARMhf zlib
+      - name: Install ARMv7 cross compiler
         run: |
           set -e
-          sudo dpkg --add-architecture armhf
           sudo apt-get update
           sudo apt-get install -y \
             gcc-arm-linux-gnueabihf \
             g++-arm-linux-gnueabihf \
             binutils-arm-linux-gnueabihf \
-            zlib1g-dev:armhf \
             make \
             bc \
             file
-          arm-linux-gnueabihf-gcc -print-sysroot
-          dpkg -L zlib1g-dev:armhf | grep -E 'libz\.(so|a)$' || true
 
       - name: Apply SGBPACK integration
         shell: pwsh
@@ -69,7 +65,7 @@ jobs:
             CXX=arm-linux-gnueabihf-g++ \
             AR=arm-linux-gnueabihf-ar \
             STRIP=arm-linux-gnueabihf-strip \
-            LDFLAGS+="-L/usr/lib/arm-linux-gnueabihf"
+            HAVE_UNZIP=0
 
       - name: Verify NES Mini binary
         working-directory: supersnes9x/libretro
