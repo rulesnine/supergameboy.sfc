@@ -1,0 +1,70 @@
+name: Build SuperSnes9x SGBPACK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - "patches/**"
+      - ".github/workflows/build-windows.yml"
+      - "README.md"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout SGBPACK project
+        uses: actions/checkout@v4
+        with:
+          path: sgbpack-project
+
+      - name: Checkout pinned SuperSnes9x
+        uses: actions/checkout@v4
+        with:
+          repository: shanytc/snes9x
+          ref: 183e03e5efed3b6d450385c98e2ccffb194153c3
+          submodules: recursive
+          path: supersnes9x
+
+      - name: Apply SGBPACK patch
+        shell: bash
+        run: |
+          cd supersnes9x
+          git apply --check ../sgbpack-project/patches/SuperSnes9x_SGBPACK_v1.patch
+          git apply ../sgbpack-project/patches/SuperSnes9x_SGBPACK_v1.patch
+          git diff --check
+          git diff --stat
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Windows x64 standalone
+        shell: cmd
+        run: |
+          msbuild supersnes9x\win32\snes9xw.sln /m /p:Configuration="Release Unicode" /p:Platform=x64
+
+      - name: Build Windows x64 libretro core
+        shell: cmd
+        run: |
+          msbuild supersnes9x\libretro\libretro-win32.vcxproj /m /p:Configuration="libretro Release" /p:Platform=x64
+
+      - name: Collect output
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "supersnes9x\win32\super-snes9x-x64.exe" "dist\SuperSnes9x-SGBPACK-x64.exe"
+          Copy-Item "supersnes9x\libretro\x64\libretro Release\supersnes9x_libretro.dll" "dist\supersnes9x_sgbpack_libretro-x64.dll"
+          Copy-Item "sgbpack-project\README.md" "dist\README-SGBPACK.txt"
+          Get-FileHash "dist\SuperSnes9x-SGBPACK-x64.exe" -Algorithm SHA256 | Format-List | Out-File "dist\SHA256.txt"
+          Get-FileHash "dist\supersnes9x_sgbpack_libretro-x64.dll" -Algorithm SHA256 | Format-List | Out-File "dist\SHA256-libretro.txt"
+
+      - name: Upload Windows x64 build
+        uses: actions/upload-artifact@v4
+        with:
+          name: SuperSnes9x-SGBPACK-Windows-x64
+          path: dist
+          retention-days: 30
