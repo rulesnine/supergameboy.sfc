@@ -109,6 +109,7 @@ jobs:
             AR="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar" \
             STRIP="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-strip" \
             HAVE_UNZIP=0 \
+            LDFLAGS="-static-libgcc -static-libstdc++" \
             LIBS="$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6"
 
       - name: Verify NES Mini ABI and GLIBC floor
@@ -140,6 +141,12 @@ jobs:
           if "$READELF" -V "$CORE" | grep -Eq 'GLIBC_2\.(2[4-9]|[3-9][0-9])'; then
             echo "ERROR: core requires GLIBC newer than 2.23"
             "$READELF" -V "$CORE" | grep -E 'GLIBC_2\.'
+            exit 1
+          fi
+
+          if "$READELF" -d "$CORE" | grep -Eq 'Shared library: \[(libstdc\+\+|libgcc_s)'; then
+            echo "ERROR: core still depends on libstdc++ or libgcc_s"
+            "$READELF" -d "$CORE" | grep 'Shared library'
             exit 1
           fi
 
