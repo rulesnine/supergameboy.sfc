@@ -270,6 +270,35 @@ int CMemory::LoadSGBPackFromBytes(const uint8 *data, uint32 size, const char *pa
     if (!S9xSGBInit())
         return -1;
 
+#ifdef SGBPACK_LITE
+    // NES/SNES Classic fast path: use the dedicated GB/SGB engine directly
+    // instead of running the complete SNES-side SGB BIOS every frame.
+    // force_model=3 enables authentic SGB command processing (palettes,
+    // ATTR, MASK, CHR_TRN/PCT_TRN border uploads) without the 65816/SPC/PPU.
+    S9xSGBSetForceModel(3);
+    S9xSGBSetRunMode(mode);
+    if (!S9xSGBLoadBootROMBytes(boot.data(), boot.size()))
+    {
+        S9xSGBDeinit();
+        return -1;
+    }
+    if (!S9xSGBLoadROMBytes(gb.data(), gb.size(), pack_path))
+    {
+        S9xSGBDeinit();
+        return -1;
+    }
+
+    S9xSGBPrepareBiosCart();
+    S9xSGBSetAudioRate(Settings.SoundPlaybackRate);
+
+    Settings.SuperGameBoy       = TRUE;
+    Settings.SGB_BIOSModeActive = FALSE;
+    Settings.GameBoyRunMode     = mode;
+    Settings.GBClockMultiplier  = 1.0f;
+    Settings.PAL                = FALSE;
+    Settings.FrameTime          = Settings.FrameTimeNTSC;
+    ROMFramesPerSecond          = 60;
+#else
     if (!S9xSGBLoadBootROMBytes(boot.data(), boot.size()))
     {
         S9xSGBDeinit();
@@ -299,6 +328,7 @@ int CMemory::LoadSGBPackFromBytes(const uint8 *data, uint32 size, const char *pa
     Settings.GameBoyRunMode     = mode;
     Settings.GBClockMultiplier  = 1.0f;
     S9xSGBSetRunMode(mode);
+#endif
 
     if (pack_path && *pack_path)
     {
@@ -333,5 +363,42 @@ insert_anchor = """bool8 CMemory::LoadROMInt (int32 ROMfillSize)
 """
 c = replace_once(c, insert_anchor, function_block + insert_anchor, "SGBPACK function insertion")
 MMC.write_text(c, encoding="utf-8")
+
+# SGBPACK_LITE keeps the direct GB/SGB engine but renders the full 256x224
+# SGB composite (border + 160x144 game pane), not the plain GB-only surface.
+CPU = ROOT / "supersnes9x" / "cpuexec.cpp"
+cpu = CPU.read_text(encoding="utf-8-sig")
+cpu_anchor = """		PPU.ScreenHeight          = SGB_GB_SCREEN_H;
+		IPPU.RenderedScreenWidth  = SGB_GB_SCREEN_W;
+		IPPU.RenderedScreenHeight = SGB_GB_SCREEN_H;
+"""
+cpu_new = """#ifdef SGBPACK_LITE
+		PPU.ScreenHeight          = 224;
+		IPPU.RenderedScreenWidth  = 256;
+		IPPU.RenderedScreenHeight = 224;
+#else
+		PPU.ScreenHeight          = SGB_GB_SCREEN_H;
+		IPPU.RenderedScreenWidth  = SGB_GB_SCREEN_W;
+		IPPU.RenderedScreenHeight = SGB_GB_SCREEN_H;
+#endif
+"""
+cpu = replace_once(cpu, cpu_anchor, cpu_new, "cpuexec lite geometry")
+
+cpu_anchor2 = """			IPPU.RenderedScreenWidth  = SGB_GB_SCREEN_W;
+			IPPU.RenderedScreenHeight = SGB_GB_SCREEN_H;
+			S9xSGBBlitScreenGB(GFX.Screen, GFX.RealPPL);
+"""
+cpu_new2 = """#ifdef SGBPACK_LITE
+			IPPU.RenderedScreenWidth  = 256;
+			IPPU.RenderedScreenHeight = 224;
+			S9xSGBBlitScreen(GFX.Screen, GFX.RealPPL);
+#else
+			IPPU.RenderedScreenWidth  = SGB_GB_SCREEN_W;
+			IPPU.RenderedScreenHeight = SGB_GB_SCREEN_H;
+			S9xSGBBlitScreenGB(GFX.Screen, GFX.RealPPL);
+#endif
+"""
+cpu = replace_once(cpu, cpu_anchor2, cpu_new2, "cpuexec lite blit")
+CPU.write_text(cpu, encoding="utf-8")
 
 print("SGBPACK source integration applied successfully.")
