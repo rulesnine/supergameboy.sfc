@@ -171,7 +171,41 @@ jobs:
 
           cat > "$HMOD_DIR/bin/sgbpack" <<'EOF'
           #!/bin/sh
-          exec retroarch-clover km_sgbpack "$1" "${@:2}"
+
+          setFileName(){
+            filename="$(readlink -f "$1")"
+            filebase="$(basename "$filename")"
+            extension="${filebase##*.}"
+          }
+
+          getSfrom(){
+            local rom="$(hexdump -e '1/4 "%u"' -s8 -n4 "$1")"
+            local footer="$(hexdump -e '1/4 "%u"' -s20 -n4 "$1")"
+            local size="$(hexdump -e '1/4 "%u"' -s$((footer+1)) -n4 "$1")"
+            dd status=none if="$1" iflag=skip_bytes skip="$rom" bs="$size" count=1
+          }
+
+          setFileName "$1"
+          shift
+
+          tmppath="/tmp/rom"
+          mkdir -p "$tmppath"
+          cd "$tmppath" || exit 1
+
+          if [ "$extension" = "7z" ]; then
+            rm -f "$tmppath"/*
+            tiny7zx x "$filename" || exit 1
+            filename="$tmppath/$(ls | head -n1)"
+            setFileName "$filename"
+          fi
+
+          if [ "$extension" = "sfrom" ]; then
+            raw="$tmppath/sgbpack_raw.sfc"
+            getSfrom "$filename" > "$raw" || exit 1
+            filename="$raw"
+          fi
+
+          exec retroarch-clover km_sgbpack "$filename" "$@"
           EOF
           chmod +x "$HMOD_DIR/bin/sgbpack"
 
