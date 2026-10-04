@@ -29,6 +29,51 @@ MMH.write_text(h, encoding="utf-8")
 # ---- memmap.cpp
 c = MMC.read_text(encoding="utf-8-sig")
 
+# Standalone loading needs one extra hook before FileLoader/HeaderRemove.
+# Snes9x treats any file whose size is +512 bytes past an 8 KiB boundary as
+# copier-headered and removes those 512 bytes. SGBPACK v1 happens to be
+# 0x140200 bytes, so we must sniff the raw file before HeaderRemove can alter it.
+raw_anchor = """    S9xSetBiosNotice(NULL);   // a fresh load owns the missing-BIOS state
+    s_bios_paths_at_load = S9xBiosPathsFingerprint();
+
+    // .gb / .gbc — hand off to the SGB subsystem. The 65816 path below
+"""
+raw_new = """    S9xSetBiosNotice(NULL);   // a fresh load owns the missing-BIOS state
+    s_bios_paths_at_load = S9xBiosPathsFingerprint();
+
+    // SGBPACK1 raw-file sniff. This must run before FileLoader/HeaderRemove:
+    // a v1 pack is 512 bytes past an 8 KiB boundary and otherwise looks like
+    // a copier-headered SNES ROM, causing Snes9x to remove the first 512 bytes
+    // and hide the footer from the SGBPACK parser.
+    if (!S9xFilenameHasExt(filename, ".zip") &&
+        !S9xFilenameHasExt(filename, ".jma"))
+    {
+        STREAM fp = OPEN_STREAM(filename, "rb");
+        if (fp)
+        {
+            std::vector<uint8> raw(MAX_ROM_SIZE + 0x200);
+            const uint32 raw_size = READ_STREAM(raw.data(), (uint32) raw.size(), fp);
+            CLOSE_STREAM(fp);
+
+            if (raw_size >= 0x100 &&
+                memcmp(raw.data() + raw_size - 0x100, "SGBPACK1", 8) == 0)
+            {
+                const int pack = LoadSGBPackFromBytes(raw.data(), raw_size, filename);
+                if (pack > 0) return TRUE;
+                if (pack < 0)
+                {
+                    S9xMessage(S9X_ERROR, S9X_ROM_INFO,
+                               "Invalid or corrupted SGBPACK1 image.");
+                    return FALSE;
+                }
+            }
+        }
+    }
+
+    // .gb / .gbc — hand off to the SGB subsystem. The 65816 path below
+"""
+c = replace_once(c, raw_anchor, raw_new, "LoadROM raw SGBPACK hook")
+
 mem_anchor = """    if (optional_rom_filename)
         ROMFilename = optional_rom_filename;
     else
