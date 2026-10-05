@@ -29,23 +29,35 @@ jobs:
         shell: pwsh
         run: python -m pip install --disable-pip-version-check pillow
 
-      - name: Generate Ik Core icon
+      - name: Prepare approved Ik Core artwork
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          python tools/generate_ikcore_icon.py dist/IkCore.ico
+          $b64 = (Get-Content "branding/IkCore_approved_128.png.b64" -Raw).Trim()
+          [IO.File]::WriteAllBytes("dist/IkCoreApproved.png", [Convert]::FromBase64String($b64))
+          python -c "from PIL import Image; im=Image.open(r'dist/IkCoreApproved.png').convert('RGBA'); im.save(r'dist/IkCore.ico', format='ICO', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128)])"
+          if (-not (Test-Path "dist/IkCoreApproved.png")) { Write-Error "Approved logo PNG was not created"; exit 1 }
+          if (-not (Test-Path "dist/IkCore.ico")) { Write-Error "Approved Ik Core ICO was not created"; exit 1 }
 
       - name: Compile native Windows Builder EXE
         shell: pwsh
         run: |
           $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
           if (-not (Test-Path $csc)) { Write-Error "C# compiler not found: $csc"; exit 1 }
-          & $csc /nologo /target:winexe /platform:x64 /optimize+ /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /win32icon:dist/IkCore.ico /resource:dist/IkCore.ico,IkCoreLogo.ico /out:dist/IkCore_SGBPACK_Builder.exe builder\IkCoreSGBPackBuilder.cs
+          & $csc /nologo /target:winexe /platform:x64 /optimize+ /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /win32icon:dist/IkCore.ico /resource:dist/IkCore.ico,IkCoreLogo.ico /resource:dist/IkCoreApproved.png,IkCoreLogo.png /out:dist/IkCore_SGBPACK_Builder.exe builder\IkCoreSGBPackBuilder.cs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          & "dist/IkCore_SGBPACK_Builder.exe" --self-test-logo
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "The approved Ik Core logo could not be loaded inside the compiled EXE."
+            exit $LASTEXITCODE
+          }
+
           $v = (Get-Item "dist/IkCore_SGBPACK_Builder.exe").VersionInfo
           Write-Host "ProductName: $($v.ProductName)"
           Write-Host "FileDescription: $($v.FileDescription)"
           Write-Host "FileVersion: $($v.FileVersion)"
+          Copy-Item "dist/IkCoreApproved.png" "dist/IkCore.png" -Force
           Get-FileHash "dist/IkCore_SGBPACK_Builder.exe" -Algorithm SHA256 | Format-List | Out-File "dist/SHA256-Builder.txt"
           @'
           Ik Core SGBPACK Builder v1.0
