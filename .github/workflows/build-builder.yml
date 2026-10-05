@@ -6,6 +6,7 @@ on:
     branches: [ main ]
     paths:
       - "builder/**"
+      - "branding/**"
       - "tools/generate_ikcore_icon.py"
       - ".github/workflows/build-builder.yml"
 
