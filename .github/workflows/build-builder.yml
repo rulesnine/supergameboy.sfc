@@ -1,0 +1,70 @@
+name: Build Ik Core SGBPACK Builder
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - "builder/**"
+      - "tools/generate_ikcore_icon.py"
+      - ".github/workflows/build-builder.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  builder-windows:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout Ik Core
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Pillow
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check pillow
+
+      - name: Generate Ik Core icon
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          python tools/generate_ikcore_icon.py dist/IkCore.ico
+
+      - name: Compile native Windows Builder EXE
+        shell: pwsh
+        run: |
+          $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          if (-not (Test-Path $csc)) { Write-Error "C# compiler not found: $csc"; exit 1 }
+          & $csc /nologo /target:winexe /platform:x64 /optimize+ /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /win32icon:dist/IkCore.ico /out:dist/IkCore_SGBPACK_Builder.exe builder/IkCoreSGBPackBuilder.cs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $v = (Get-Item "dist/IkCore_SGBPACK_Builder.exe").VersionInfo
+          Write-Host "ProductName: $($v.ProductName)"
+          Write-Host "FileDescription: $($v.FileDescription)"
+          Write-Host "FileVersion: $($v.FileVersion)"
+          Get-FileHash "dist/IkCore_SGBPACK_Builder.exe" -Algorithm SHA256 | Format-List | Out-File "dist/SHA256-Builder.txt"
+          @'
+          Ik Core SGBPACK Builder v1.0
+
+          Ejecutable nativo de Windows. No requiere PowerShell ni archivos .bat/.ps1.
+
+          Uso:
+          1. Abra IkCore_SGBPACK_Builder.exe.
+          2. Seleccione el programa SGB (.sfc/.smc).
+          3. Seleccione la ROM Game Boy (.gb/.gbc).
+          4. Seleccione la boot ROM SGB de 256 bytes.
+          5. Elija la salida y pulse CREAR SGBPACK1.
+
+          No incluye ROMs, BIOS ni boot ROMs.
+          '@ | Set-Content -Encoding UTF8 "dist/README.txt"
+
+      - name: Upload native Builder
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ik-Core-SGBPACK-Builder-Windows-x64
+          path: dist
+          retention-days: 30
