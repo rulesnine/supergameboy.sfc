@@ -25,22 +25,17 @@ Ik Core detecta la firma `SGBPACK1`, valida el contenedor, separa internamente s
 
 ## Base técnica
 
-La compilación usa una base fija y reproducible:
-
 ```text
 shanytc/snes9x
 commit 183e03e5efed3b6d450385c98e2ccffb194153c3
 ```
 
-Sobre esa base se aplica la integración SGBPACK y la identidad de Ik Core durante la compilación.
-
 ## Identidad
 
 Nombre del producto: **Ik Core**  
 Subtítulo: **SGBPACK Runtime for Windows**  
+Ejecutable oficial: `IkCore.exe`  
 Formato: **SGBPACK1**
-
-El ejecutable oficial se distribuye como `IkCore.exe`. El icono de Ik Core es propio del fork y no utiliza logotipos de Nintendo ni de los proyectos base.
 
 ## Aviso legal
 
@@ -58,5 +53,3 @@ GitHub Actions genera:
 - `ikcore_sgbpack_libretro-x64.dll` — core libretro Windows x64 opcional.
 - `IkCore.ico`
 - README, créditos, licencia y hashes SHA-256.
-
-El formato SGBPACK1 y el Builder no convierten una ROM Game Boy en una ROM SNES universal: los archivos SGBPACK1 requieren un cargador compatible como Ik Core.
