@@ -18,4 +18,4 @@ El ZIP debe contener:
 - `LICENSE-Snes9x.txt`
 - hashes SHA-256
 
-La build de NES Mini fue retirada de la distribución oficial por rendimiento insuficiente. El proyecto soportado es Windows x64.
+La build de NES Mini queda fuera de la distribución oficial por rendimiento insuficiente. El proyecto soportado es Windows x64.
