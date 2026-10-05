@@ -401,4 +401,63 @@ cpu_new2 = """#ifdef SGBPACK_LITE
 cpu = replace_once(cpu, cpu_anchor2, cpu_new2, "cpuexec lite blit")
 CPU.write_text(cpu, encoding="utf-8")
 
-print("SGBPACK source integration applied successfully.")
+
+# ---- Ik Core Windows identity
+WLANG = ROOT / "supersnes9x" / "win32" / "wlanguage.h"
+w = WLANG.read_text(encoding="utf-8-sig")
+if "SuperSnes9x" not in w:
+    raise SystemExit("wlanguage.h: expected SuperSnes9x branding anchor")
+w = w.replace("SuperSnes9x", "Ik Core")
+
+disc_start = w.find("#define DISCLAIMER_TEXT")
+disc_end = w.find("\n\n#define APP_NAME", disc_start)
+if disc_start < 0 or disc_end < 0:
+    raise SystemExit("wlanguage.h: disclaimer anchors not found")
+disclaimer = r'''#define DISCLAIMER_TEXT        TEXT("Ik Core v%s for Windows.\r\n\
+Unofficial SGBPACK Runtime.\r\n\r\n\
+Derived from SuperSnes9x / Snes9x.\r\n\
+Based on Snes9x by Gary Henderson and Jerremy Koot, with contributions\r\n\
+from the Snes9x and SuperSnes9x development communities.\r\n\r\n\
+Ik Core adds SGBPACK1 single-file loading and its own Windows identity.\r\n\
+Full copyright notices and license terms are distributed with this build.\r\n\r\n\
+Ik Core is independent and is not affiliated with, authorized, sponsored\r\n\
+or endorsed by Nintendo Co., Ltd. Nintendo and related product names are\r\n\
+trademarks of their respective owners.")'''
+w = w[:disc_start] + disclaimer + w[disc_end:]
+WLANG.write_text(w, encoding="utf-8")
+
+RC = ROOT / "supersnes9x" / "win32" / "rsrc" / "snes9x.rc"
+rc = RC.read_text(encoding="utf-8-sig")
+if "SuperSnes9x" not in rc:
+    raise SystemExit("snes9x.rc: expected SuperSnes9x branding anchor")
+rc = rc.replace("SuperSnes9x", "Ik Core")
+rc = rc.replace(" FILEVERSION 1,5,5,0", " FILEVERSION 1,0,0,0", 1)
+rc = rc.replace(" PRODUCTVERSION 1,5,5,0", " PRODUCTVERSION 1,0,0,0", 1)
+rc = rc.replace('VALUE "CompanyName", "http://www.snes9x.com"', 'VALUE "CompanyName", "Ik Core Project"', 1)
+rc = rc.replace('VALUE "FileDescription", "Ik Core"', 'VALUE "FileDescription", "Ik Core - SGBPACK Runtime"', 1)
+rc = rc.replace('VALUE "FileVersion", "1.63"', 'VALUE "FileVersion", "1.0.0"', 1)
+rc = rc.replace('VALUE "InternalName", "Ik Core"', 'VALUE "InternalName", "IkCore"', 1)
+rc = rc.replace('VALUE "LegalCopyright", "Copyright  1996-2024"', 'VALUE "LegalCopyright", "Snes9x contributors; Ik Core modifications 2026"', 1)
+rc = rc.replace('VALUE "OriginalFilename", "Ik Core.exe"', 'VALUE "OriginalFilename", "IkCore.exe"', 1)
+rc = rc.replace('VALUE "ProductName", "Ik Core SNES Emulator"', 'VALUE "ProductName", "Ik Core - SGBPACK Runtime"', 1)
+rc = rc.replace('VALUE "ProductVersion", "1.63"', 'VALUE "ProductVersion", "1.0.0"', 1)
+RC.write_text(rc, encoding="utf-8")
+
+WS = ROOT / "supersnes9x" / "win32" / "wsnes9x.cpp"
+ws = WS.read_text(encoding="utf-8-sig")
+ws = ws.replace("SuperSnes9x", "Ik Core")
+ws = ws.replace('TEXT("Snes9x - Menu Initialization Failure")',
+                'TEXT("Ik Core - Menu Initialization Failure")')
+ws = ws.replace("before opening Snes9x again.", "before opening Ik Core again.")
+ws = ws.replace("Snes9x command line options have been written to stdout.txt in the same folder as snes9x.exe",
+                "Ik Core command line options have been written to stdout.txt in the same folder as IkCore.exe")
+WS.write_text(ws, encoding="utf-8")
+
+# Brand the SGBPACK loader message itself so CI can prove this integration ran.
+c = MMC.read_text(encoding="utf-8")
+c = c.replace("Loaded SGBPACK1 single-file Super Game Boy image.",
+              "Ik Core loaded SGBPACK1 single-file Super Game Boy image.")
+MMC.write_text(c, encoding="utf-8")
+
+
+print("SGBPACK and Ik Core source integration applied successfully.")
