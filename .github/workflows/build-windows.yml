@@ -1,4 +1,4 @@
-name: Build SuperSnes9x SGBPACK
+name: Build Ik Core for Windows
 
 on:
   workflow_dispatch:
@@ -9,6 +9,8 @@ on:
       - "patches/**"
       - ".github/workflows/build-windows.yml"
       - "README.md"
+      - "CREDITS.md"
+      - "BRANDING.md"
 
 permissions:
   contents: read
@@ -18,10 +20,10 @@ jobs:
     runs-on: windows-2022
 
     steps:
-      - name: Checkout SGBPACK project
+      - name: Checkout Ik Core project
         uses: actions/checkout@v4
         with:
-          path: sgbpack-project
+          path: ikcore-project
 
       - name: Checkout pinned SuperSnes9x
         uses: actions/checkout@v4
@@ -31,18 +33,40 @@ jobs:
           submodules: recursive
           path: supersnes9x
 
-      - name: Apply SGBPACK integration
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install branding dependency
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check pillow
+
+      - name: Apply SGBPACK and Ik Core integration
         shell: pwsh
         run: |
-          python sgbpack-project/tools/apply_sgbpack.py
+          python ikcore-project/tools/apply_sgbpack.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          python ikcore-project/tools/generate_ikcore_icon.py supersnes9x/win32/rsrc/IkCore.ico
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          Copy-Item supersnes9x/win32/rsrc/IkCore.ico supersnes9x/win32/rsrc/icon1.ico -Force
+          Copy-Item supersnes9x/win32/rsrc/IkCore.ico supersnes9x/win32/rsrc/icon2.ico -Force
+          Copy-Item supersnes9x/win32/rsrc/IkCore.ico supersnes9x/win32/rsrc/icon3.ico -Force
+          Copy-Item supersnes9x/win32/rsrc/IkCore.ico supersnes9x/win32/rsrc/icon4.ico -Force
+
           Set-Location supersnes9x
           git diff --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git diff --stat
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (-not (Select-String -Path "memmap.cpp" -Pattern "Loaded SGBPACK1 single-file Super Game Boy image." -Quiet)) {
-            Write-Error "SGBPACK integration marker missing from memmap.cpp"
+
+          if (-not (Select-String -Path "memmap.cpp" -Pattern "Ik Core loaded SGBPACK1" -Quiet)) {
+            Write-Error "Ik Core SGBPACK integration marker missing from memmap.cpp"
+            exit 1
+          }
+          if (-not (Select-String -Path "win32/wlanguage.h" -Pattern 'WINDOW_TITLE TEXT\("Ik Core' -Quiet)) {
+            Write-Error "Ik Core window branding missing"
             exit 1
           }
 
@@ -59,19 +83,33 @@ jobs:
         run: |
           msbuild supersnes9x\libretro\libretro-win32.vcxproj /m /p:Configuration="libretro Release" /p:Platform=x64
 
-      - name: Collect output
+      - name: Collect Ik Core output
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item "supersnes9x\win32\super-snes9x-x64.exe" "dist\SuperSnes9x-SGBPACK-x64.exe"
-          Copy-Item "supersnes9x\libretro\x64\libretro Release\supersnes9x_libretro.dll" "dist\supersnes9x_sgbpack_libretro-x64.dll"
-          Copy-Item "sgbpack-project\README.md" "dist\README-SGBPACK.txt"
-          Get-FileHash "dist\SuperSnes9x-SGBPACK-x64.exe" -Algorithm SHA256 | Format-List | Out-File "dist\SHA256.txt"
-          Get-FileHash "dist\supersnes9x_sgbpack_libretro-x64.dll" -Algorithm SHA256 | Format-List | Out-File "dist\SHA256-libretro.txt"
+          Copy-Item "supersnes9x\win32\super-snes9x-x64.exe" "dist\IkCore.exe"
+          Copy-Item "supersnes9x\libretro\x64\libretro Release\supersnes9x_libretro.dll" "dist\ikcore_sgbpack_libretro-x64.dll"
+          Copy-Item "supersnes9x\win32\rsrc\IkCore.ico" "dist\IkCore.ico"
+          Copy-Item "ikcore-project\README.md" "dist\README-IkCore.txt"
+          Copy-Item "ikcore-project\CREDITS.md" "dist\CREDITS.md"
+          Copy-Item "supersnes9x\LICENSE" "dist\LICENSE-Snes9x.txt"
 
-      - name: Upload Windows x64 build
+          $v = (Get-Item "dist\IkCore.exe").VersionInfo
+          Write-Host "ProductName: $($v.ProductName)"
+          Write-Host "FileDescription: $($v.FileDescription)"
+          Write-Host "OriginalFilename: $($v.OriginalFilename)"
+          if ($v.ProductName -notlike "Ik Core*") {
+            Write-Error "Executable branding check failed"
+            exit 1
+          }
+
+          Get-FileHash "dist\IkCore.exe" -Algorithm SHA256 | Format-List | Out-File "dist\SHA256-IkCore.txt"
+          Get-FileHash "dist\ikcore_sgbpack_libretro-x64.dll" -Algorithm SHA256 | Format-List | Out-File "dist\SHA256-libretro.txt"
+          Get-FileHash "dist\IkCore.ico" -Algorithm SHA256 | Format-List | Out-File "dist\SHA256-icon.txt"
+
+      - name: Upload Ik Core Windows x64 build
         uses: actions/upload-artifact@v4
         with:
-          name: SuperSnes9x-SGBPACK-Windows-x64
+          name: Ik-Core-Windows-x64
           path: dist
           retention-days: 30
