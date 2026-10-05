@@ -79,6 +79,34 @@ namespace IkCoreSGBPackBuilder
         private readonly Panel progressFill = new Panel();
         private string lastOutputPath = "";
 
+        private static Icon LoadEmbeddedIkCoreIcon()
+        {
+            try
+            {
+                using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream("IkCoreLogo.ico"))
+                {
+                    if (s == null) return null;
+                    using (Icon src = new Icon(s))
+                        return (Icon)src.Clone();
+                }
+            }
+            catch { return null; }
+        }
+
+        private static Bitmap LoadEmbeddedIkCoreBitmap()
+        {
+            try
+            {
+                using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream("IkCoreLogo.ico"))
+                {
+                    if (s == null) return null;
+                    using (Icon src = new Icon(s, new Size(128, 128)))
+                        return src.ToBitmap();
+                }
+            }
+            catch { return null; }
+        }
+
         private static TextBox CreateInputBox()
         {
             return new TextBox {
@@ -100,11 +128,9 @@ namespace IkCoreSGBPackBuilder
             Font = new Font("Segoe UI", 9.0f, FontStyle.Regular);
             AutoScaleMode = AutoScaleMode.Dpi;
 
-            try
-            {
-                Icon = new Icon(Application.ExecutablePath, new Size(48, 48));
-            }
-            catch { }
+            Icon embeddedIcon = LoadEmbeddedIkCoreIcon();
+            if (embeddedIcon != null)
+                Icon = embeddedIcon;
 
             BuildMenu();
             BuildHeader();
@@ -168,12 +194,9 @@ namespace IkCoreSGBPackBuilder
                 BackColor = Color.White
             };
 
-            try
-            {
-                using (Icon appIcon = new Icon(Application.ExecutablePath, new Size(128, 128)))
-                    logo.Image = appIcon.ToBitmap();
-            }
-            catch { }
+            Bitmap logoBitmap = LoadEmbeddedIkCoreBitmap();
+            if (logoBitmap != null)
+                logo.Image = logoBitmap;
             Controls.Add(logo);
 
             Label title = new Label {
