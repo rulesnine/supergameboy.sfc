@@ -1,19 +1,21 @@
-# Cómo iniciar la compilación
-
-GitHub no ejecuta automáticamente workflows generados por la misma integración.
+# Compilar Ik Core para Windows
 
 1. Abre este repositorio en GitHub.
-2. Pulsa **Actions**.
-3. En la columna izquierda selecciona **Build SuperSnes9x SGBPACK**.
+2. Entra a **Actions**.
+3. Selecciona **Build Ik Core for Windows**.
 4. Pulsa **Run workflow**.
-5. Deja la rama en **main** y pulsa el botón verde **Run workflow**.
-6. Espera a que termine.
-7. Abre la ejecución y descarga el artifact **SuperSnes9x-SGBPACK-Windows-x64**.
+5. Usa la rama **main** y confirma.
+6. Espera a que termine en verde.
+7. Descarga el artifact **Ik-Core-Windows-x64**.
 
-El ZIP generado debe contener:
-- SuperSnes9x-SGBPACK-x64.exe
-- supersnes9x_sgbpack_libretro-x64.dll
-- README-SGBPACK.txt
+El ZIP debe contener:
+
+- `IkCore.exe`
+- `ikcore_sgbpack_libretro-x64.dll` (opcional)
+- `IkCore.ico`
+- `README-IkCore.txt`
+- `CREDITS.md`
+- `LICENSE-Snes9x.txt`
 - hashes SHA-256
 
-Si la compilación falla, no cambies nada: copia el enlace de la ejecución o dime que falló y revisaré los logs.
+La build de NES Mini fue retirada de la distribución oficial por rendimiento insuficiente. El proyecto soportado es Windows x64.
