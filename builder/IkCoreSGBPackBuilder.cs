@@ -24,9 +24,21 @@ namespace IkCoreSGBPackBuilder
         private static extern bool SetProcessDPIAware();
 
         [STAThread]
-        private static void Main()
+        private static void Main(string[] args)
         {
             try { SetProcessDPIAware(); } catch { }
+
+            if (args != null && Array.Exists(args, delegate(string a) {
+                return string.Equals(a, "--self-test-logo", StringComparison.OrdinalIgnoreCase);
+            }))
+            {
+                using (Bitmap testLogo = MainForm.LoadApprovedIkCoreBitmap())
+                {
+                    Environment.Exit(testLogo != null && testLogo.Width > 0 && testLogo.Height > 0 ? 0 : 10);
+                }
+                return;
+            }
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm());
@@ -93,15 +105,15 @@ namespace IkCoreSGBPackBuilder
             catch { return null; }
         }
 
-        private static Bitmap LoadEmbeddedIkCoreBitmap()
+        internal static Bitmap LoadApprovedIkCoreBitmap()
         {
             try
             {
-                using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream("IkCoreLogo.ico"))
+                using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream("IkCoreLogo.png"))
                 {
                     if (s == null) return null;
-                    using (Icon src = new Icon(s, new Size(128, 128)))
-                        return src.ToBitmap();
+                    using (Image src = Image.FromStream(s, true, true))
+                        return new Bitmap(src);
                 }
             }
             catch { return null; }
@@ -194,7 +206,7 @@ namespace IkCoreSGBPackBuilder
                 BackColor = Color.White
             };
 
-            Bitmap logoBitmap = LoadEmbeddedIkCoreBitmap();
+            Bitmap logoBitmap = LoadApprovedIkCoreBitmap();
             if (logoBitmap != null)
                 logo.Image = logoBitmap;
             Controls.Add(logo);
