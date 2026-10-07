@@ -24,8 +24,121 @@
 #include <time.h>
 #include <unistd.h>
 
-#include <EGL/egl.h>
-#include <GLES2/gl2.h>
+#include <dlfcn.h>
+
+typedef void *EGLDisplay;
+typedef void *EGLSurface;
+typedef void *EGLContext;
+typedef void *EGLConfig;
+typedef void *EGLNativeDisplayType;
+typedef void *EGLNativeWindowType;
+typedef int EGLint;
+typedef unsigned int EGLBoolean;
+
+#define EGL_FALSE 0
+#define EGL_TRUE 1
+#define EGL_DEFAULT_DISPLAY ((EGLNativeDisplayType)0)
+#define EGL_NO_DISPLAY ((EGLDisplay)0)
+#define EGL_NO_SURFACE ((EGLSurface)0)
+#define EGL_NO_CONTEXT ((EGLContext)0)
+#define EGL_RENDERABLE_TYPE 0x3040
+#define EGL_OPENGL_ES2_BIT 0x0004
+#define EGL_SURFACE_TYPE 0x3033
+#define EGL_WINDOW_BIT 0x0004
+#define EGL_RED_SIZE 0x3024
+#define EGL_GREEN_SIZE 0x3022
+#define EGL_BLUE_SIZE 0x3022
+#define EGL_ALPHA_SIZE 0x3021
+#define EGL_NONE 0x3038
+#define EGL_CONTEXT_CLIENT_VERSION 0x3098
+
+#define GL_COLOR_BUFFER_BIT 0x00004000
+#define GL_DITHER 0x0BD0
+#define GL_SCISSOR_TEST 0x0C11
+#define GL_VENDOR 0x1F00
+#define GL_RENDERER 0x1F01
+
+typedef float GLfloat;
+typedef unsigned int GLenum;
+typedef int GLint;
+typedef int GLsizei;
+typedef unsigned char GLubyte;
+
+static void *libEGL = NULL;
+static void *libGLES = NULL;
+
+static EGLDisplay (*p_eglGetDisplay)(EGLNativeDisplayType);
+static EGLBoolean (*p_eglInitialize)(EGLDisplay,EGLint*,EGLint*);
+static EGLBoolean (*p_eglChooseConfig)(EGLDisplay,const EGLint*,EGLConfig*,EGLint,EGLint*);
+static EGLSurface (*p_eglCreateWindowSurface)(EGLDisplay,EGLConfig,EGLNativeWindowType,const EGLint*);
+static EGLContext (*p_eglCreateContext)(EGLDisplay,EGLConfig,EGLContext,const EGLint*);
+static EGLBoolean (*p_eglMakeCurrent)(EGLDisplay,EGLSurface,EGLSurface,EGLContext);
+static EGLBoolean (*p_eglSwapBuffers)(EGLDisplay,EGLSurface);
+static EGLBoolean (*p_eglSwapInterval)(EGLDisplay,EGLint);
+static EGLBoolean (*p_eglDestroyContext)(EGLDisplay,EGLContext);
+static EGLBoolean (*p_eglDestroySurface)(EGLDisplay,EGLSurface);
+static EGLBoolean (*p_eglTerminate)(EGLDisplay);
+static EGLint (*p_eglGetError)(void);
+
+static void (*p_glDisable)(GLenum);
+static void (*p_glEnable)(GLenum);
+static void (*p_glScissor)(GLint,GLint,GLsizei,GLsizei);
+static void (*p_glClearColor)(GLfloat,GLfloat,GLfloat,GLfloat);
+static void (*p_glClear)(unsigned int);
+static void (*p_glViewport)(GLint,GLint,GLsizei,GLsizei);
+static const GLubyte *(*p_glGetString)(GLenum);
+
+static int load_gl(void) {
+#define LOAD_EGL(name) do { *(void **)(&p_##name) = dlsym(libEGL, #name); if (!p_##name) return -1; } while (0)
+#define LOAD_GL(name) do { *(void **)(&p_##name) = dlsym(libGLES, #name); if (!p_##name) return -1; } while (0)
+    libEGL = dlopen("libEGL.so", RTLD_NOW | RTLD_LOCAL);
+    if (!libEGL) libEGL = dlopen("libEGL.so.1", RTLD_NOW | RTLD_LOCAL);
+    libGLES = dlopen("libGLESv2.so", RTLD_NOW | RTLD_LOCAL);
+    if (!libGLES) libGLES = dlopen("libGLESv2.so.2", RTLD_NOW | RTLD_LOCAL);
+    if (!libEGL || !libGLES) return -1;
+
+    LOAD_EGL(eglGetDisplay);
+    LOAD_EGL(eglInitialize);
+    LOAD_EGL(eglChooseConfig);
+    LOAD_EGL(eglCreateWindowSurface);
+    LOAD_EGL(eglCreateContext);
+    LOAD_EGL(eglMakeCurrent);
+    LOAD_EGL(eglSwapBuffers);
+    LOAD_EGL(eglSwapInterval);
+    LOAD_EGL(eglDestroyContext);
+    LOAD_EGL(eglDestroySurface);
+    LOAD_EGL(eglTerminate);
+    LOAD_EGL(eglGetError);
+
+    LOAD_GL(glDisable);
+    LOAD_GL(glEnable);
+    LOAD_GL(glScissor);
+    LOAD_GL(glClearColor);
+    LOAD_GL(glClear);
+    LOAD_GL(glViewport);
+    LOAD_GL(glGetString);
+    return 0;
+}
+
+#define eglGetDisplay p_eglGetDisplay
+#define eglInitialize p_eglInitialize
+#define eglChooseConfig p_eglChooseConfig
+#define eglCreateWindowSurface p_eglCreateWindowSurface
+#define eglCreateContext p_eglCreateContext
+#define eglMakeCurrent p_eglMakeCurrent
+#define eglSwapBuffers p_eglSwapBuffers
+#define eglSwapInterval p_eglSwapInterval
+#define eglDestroyContext p_eglDestroyContext
+#define eglDestroySurface p_eglDestroySurface
+#define eglTerminate p_eglTerminate
+#define eglGetError p_eglGetError
+#define glDisable p_glDisable
+#define glEnable p_glEnable
+#define glScissor p_glScissor
+#define glClearColor p_glClearColor
+#define glClear p_glClear
+#define glViewport p_glViewport
+#define glGetString p_glGetString
 
 typedef struct {
     unsigned short width;
@@ -163,6 +276,10 @@ int main(int argc, char **argv) {
 
     printf("Ik Core Native N1.7 - Clover EGL lifecycle\n");
     printf("audio       : NO se abre ALSA en esta prueba\n");
+    if (load_gl() != 0) {
+        fprintf(stderr, "ERROR: no se pudieron cargar libEGL/libGLESv2: %s\n", dlerror());
+        return 9;
+    }
 
     if (get_fb_size(&native) != 0) {
         fprintf(stderr, "ERROR: no se pudo leer /dev/fb0\n");
@@ -295,5 +412,7 @@ int main(int argc, char **argv) {
     printf("audio       : nunca fue abierto por Ik Core\n");
     fflush(stdout);
 
+    if (libGLES) dlclose(libGLES);
+    if (libEGL) dlclose(libEGL);
     return 0;
 }
