@@ -1,41 +1,39 @@
 # Ik Core Native — NES Mini
 
-Rama experimental para ejecutar SGBPACK directamente sobre Linux ARMv7 de NES Mini, sin RetroArch ni libretro.
-
 ## Estado
 
 - N0: valida SGBPACK1.
-- N1: primer framebuffer directo.
-- N1.1: blitter optimizado; hardware real midio ~60 FPS.
-- N1.2 (actual): prueba de pantalla exclusiva sin detener Clover.
-  - usa la segunda pagina del framebuffer 1280x720 cuando existe
-  - hace `FBIOPAN_DISPLAY` hacia esa pagina
-  - limpia esa pagina a negro antes de mostrarla
-  - dibuja SGB 256x224 a 3x (768x672)
-  - restaura el yoffset original al terminar
-  - identifica `Nintendo Clovercon - controller1`
-  - intenta `EVIOCGRAB` para leer el mando en exclusiva
-  - muestra codigos reales del control
-- N2: integrar el motor SGB completo en este frontend nativo.
-- N3: perfilado/optimizacion Cortex-A7 conservando las funciones SGB.
+- N1: framebuffer directo.
+- N1.1: blitter optimizado; ~60 FPS confirmados en hardware real.
+- N1.2: segunda pagina del framebuffer + Clovercon exclusivo; ~60 FPS confirmados, pero Clover siguio repintando.
+- **N1.3 (actual): fullscreen exclusivo**
+  - detecta solo el renderizador de interfaz Clover (ReedPlayer-Clover-nes / clover-ui-nes)
+  - lo pausa con SIGSTOP durante la prueba
+  - usa la segunda pagina del framebuffer
+  - toma Clovercon con EVIOCGRAB
+  - al terminar restaura y envia SIGCONT a Clover
+  - Ctrl+C/SIGTERM salen por ruta de limpieza normal
 
-## Uso N1.2
+No mata Clover, no modifica firmware y no toca kernel/bootloader/particiones.
+
+## Uso
 
 ```sh
 chmod +x sgbpack-native
 ./sgbpack-native KOF96_SGBPACK_v1_REUPLOAD.sfc
 ```
 
-Durante los 10 segundos pulsa D-pad, A, B, Start y Select.
+Durante 10 segundos pulsa botones.
 
-Copiar al final:
+Pasa estas lineas:
 
 ```text
+Clover STOP : ...
+Clover UI   : procesos suspendidos=...
 pan display : ...
-NATIVE FPS  : xx.xx
-input events: n
+NATIVE FPS  : ...
+input events: ...
+Clover CONT : ...
 ```
 
-y todas las lineas `pad event`.
-
-Si la pantalla sigue mezclandose con Clover aun usando la segunda pagina, el siguiente paso sera suspender temporalmente el proceso de Clover durante la ejecucion y reanudarlo al salir.
+Lo importante: confirmar si ahora desaparece completamente el menu mientras corre.
