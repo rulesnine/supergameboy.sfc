@@ -1,27 +1,40 @@
 # Ik Core Native — NES Mini
 
-## Estado confirmado en hardware
-- framebuffer directo: 1280x720, doble pagina 1280x1440
-- blitter 256x224 -> 768x672: ~60 FPS
-- Clovercon directo: /dev/input/event24 + EVIOCGRAB
-- clover-mcp NO debe suspenderse
-- desde shell, Clover sigue componiendo su menu por encima
-- forzar DISP_CMD_LAYER_TOP desde shell devuelve EPERM
+## N1.7 — Clover EGL lifecycle
 
-## N1.6 — prueba HMOD / ciclo normal de Clover
+La N1.6 se descarta: entraba en negro, terminaba con C8 y dejaba el audio del sistema sin restaurar correctamente.
 
-Esta prueba ya no intenta ganar la pantalla desde una sesion shell. El objetivo es lanzar Ik Core Native como una aplicacion/juego real desde Clover, igual que un emulador normal, para que el propio ciclo de Clover ceda la pantalla.
+N1.7 cambia el frontend:
 
-El HMOD instala:
+- no escribe video directamente en /dev/fb0
+- no usa /dev/disp
+- no envia SIGSTOP/SIGKILL
+- no abre ALSA
+- crea una superficie EGL/OpenGL ES 2 como una aplicacion nativa de Clover
+- toma Clovercon con EVIOCGRAB
+- renderiza un patron fullscreen 10 segundos
+- libera input, contexto, superficie y display EGL de forma ordenada
 
-`/bin/sgbpack-native`
+El objetivo de esta version NO es emular SGB todavia. Solo valida el ciclo:
 
-Comando de lanzamiento para el acceso de prueba:
+Clover -> Ik Core -> Clover
+
+sin C8 y sin romper audio.
+
+## Prueba
+
+Instala el HMOD y usa el mismo acceso que ya llama:
 
 ```sh
 /bin/sgbpack-native /var/lib/hakchi/sgb-native-test/KOF96_SGBPACK_v1_REUPLOAD.sfc
 ```
 
-No usa SIGSTOP ni SIGKILL y no modifica kernel, firmware ni particiones.
+El argumento SGBPACK se conserva por compatibilidad con el acceso actual, aunque N1.7 aun no carga el motor SGB.
 
-Si al lanzarlo desde Clover desaparece el menu y queda solo el patron, el frontend nativo queda validado y se pasa a N2: integrar el motor SGB completo.
+Esperado:
+1. desaparece Clover
+2. aparece patron fullscreen
+3. dura 10 segundos
+4. vuelve a Clover
+5. audio del menu sigue funcionando
+6. sin error C8
