@@ -2,17 +2,12 @@
 
 ## Estado
 
-- N0: valida SGBPACK1.
-- N1: framebuffer directo.
-- N1.1: blitter optimizado; ~60 FPS confirmado.
-- N1.2: segunda pagina + Clovercon exclusivo; ~60 FPS confirmado.
-- N1.3: intento de pausar Clover por nombre; no encontro el proceso real.
-- **N1.4 (actual): diagnostico del propietario de pantalla**
-  - escanea `/proc/*/fd`
-  - lista procesos con `/dev/fb0` o `/dev/disp` abiertos
-  - imprime PID, comm y cmdline
-  - no suspende ningun proceso todavia
-  - mantiene la prueba de video a 60 Hz y Clovercon exclusivo
+- N0: SGBPACK1 validado.
+- N1/N1.1: framebuffer nativo y blitter ~60 FPS.
+- N1.2: segunda pagina + Clovercon exclusivo ~60 FPS.
+- N1.3/N1.4: se descubrio que `clover-mcp` controla `/dev/disp`.
+- Pausar `clover-mcp` congela la consola: **esa ruta queda descartada**.
+- **N1.5 SAFE (actual):** no suspende procesos. Obtiene el layer handle de `/dev/fb0` y usa el display engine sunxi para mover ese layer al frente con `DISP_CMD_LAYER_TOP`.
 
 ## Uso
 
@@ -21,11 +16,17 @@ chmod +x sgbpack-native
 ./sgbpack-native KOF96_SGBPACK_v1_REUPLOAD.sfc
 ```
 
-Copia especialmente todas las lineas:
+Pasa estas lineas:
 
 ```text
-display proc: pid=... comm=[...] cmd=[...]
-display proc count: ...
+fb layer    : ...
+layer prio  : before=...
+layer TOP   : ...
+pan display : ...
+NATIVE FPS  : ...
+input events: ...
 ```
 
-Con esos nombres/PIDs se prepara N1.5 para pausar solo el renderer correcto, sin tocar procesos críticos.
+Y confirma visualmente si el menu de Clover deja de verse durante los 10 segundos.
+
+Esta prueba no envia SIGSTOP ni SIGKILL a Clover, clover-mcp o kachikachi.
