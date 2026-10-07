@@ -1,0 +1,48 @@
+name: Build NES Mini Native Probe
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'native/**'
+      - '.github/workflows/build-nesmini-native.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ARMv7 cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
+
+      - name: Build static ARMv7 executable
+        run: |
+          mkdir -p dist
+          arm-linux-gnueabihf-gcc \
+            -O3 -pipe -static \
+            -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard \
+            -D_FILE_OFFSET_BITS=64 \
+            native/sgbpack_native_probe.c \
+            -o dist/sgbpack-native
+          arm-linux-gnueabihf-strip dist/sgbpack-native
+
+      - name: Verify binary
+        run: |
+          file dist/sgbpack-native
+          arm-linux-gnueabihf-readelf -h dist/sgbpack-native
+          arm-linux-gnueabihf-readelf -d dist/sgbpack-native || true
+          sha256sum dist/sgbpack-native | tee dist/SHA256SUMS.txt
+
+      - name: Package
+        run: |
+          cp native/README.md dist/README-NATIVE.txt
+          tar -C dist -czf IkCore-NESMini-Native-N0.tar.gz .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IkCore-NESMini-Native-N0
+          path: IkCore-NESMini-Native-N0.tar.gz
+          if-no-files-found: error
