@@ -1,4 +1,4 @@
-name: Build NES Mini Native Probe
+name: Build NES Mini Native N1
 
 on:
   workflow_dispatch:
@@ -18,31 +18,34 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
 
-      - name: Build static ARMv7 executable
+      - name: Build static ARMv7 N0 and N1
         run: |
           mkdir -p dist
-          arm-linux-gnueabihf-gcc \
-            -O3 -pipe -static \
-            -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard \
-            -D_FILE_OFFSET_BITS=64 \
-            native/sgbpack_native_probe.c \
-            -o dist/sgbpack-native
-          arm-linux-gnueabihf-strip dist/sgbpack-native
+          COMMON="-O3 -pipe -static -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -D_FILE_OFFSET_BITS=64"
 
-      - name: Verify binary
+          arm-linux-gnueabihf-gcc $COMMON native/sgbpack_native_probe.c -o dist/sgbpack-native-n0
+          arm-linux-gnueabihf-gcc $COMMON native/sgbpack_native_n1.c -o dist/sgbpack-native
+
+          arm-linux-gnueabihf-strip dist/sgbpack-native-n0 dist/sgbpack-native
+
+      - name: Verify binaries
         run: |
-          file dist/sgbpack-native
+          file dist/sgbpack-native-n0 dist/sgbpack-native
           arm-linux-gnueabihf-readelf -h dist/sgbpack-native
           arm-linux-gnueabihf-readelf -d dist/sgbpack-native || true
-          sha256sum dist/sgbpack-native | tee dist/SHA256SUMS.txt
+          if arm-linux-gnueabihf-readelf -d dist/sgbpack-native | grep -q NEEDED; then
+            echo "ERROR: N1 no es estatico"
+            exit 1
+          fi
+          sha256sum dist/sgbpack-native-n0 dist/sgbpack-native | tee dist/SHA256SUMS.txt
 
       - name: Package
         run: |
           cp native/README.md dist/README-NATIVE.txt
-          tar -C dist -czf IkCore-NESMini-Native-N0.tar.gz .
+          tar -C dist -czf IkCore-NESMini-Native-N1.tar.gz .
 
       - uses: actions/upload-artifact@v4
         with:
-          name: IkCore-NESMini-Native-N0
-          path: IkCore-NESMini-Native-N0.tar.gz
+          name: IkCore-NESMini-Native-N1
+          path: IkCore-NESMini-Native-N1.tar.gz
           if-no-files-found: error
