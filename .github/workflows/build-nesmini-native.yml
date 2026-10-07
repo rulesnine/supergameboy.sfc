@@ -17,7 +17,7 @@ jobs:
         run: |
           sudo dpkg --add-architecture armhf
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf libegl-dev:armhf libgles-dev:armhf
+          sudo apt-get install -y gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf libegl1-mesa-dev:armhf libgles2-mesa-dev:armhf
 
       - name: Build ARMv7 EGL frontend
         run: |
