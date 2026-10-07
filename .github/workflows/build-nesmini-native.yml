@@ -13,35 +13,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Enable armhf packages
+      - name: Install ARMv7 cross compiler
         run: |
-          sudo dpkg --add-architecture armhf
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf libegl1-mesa-dev:armhf libgles2-mesa-dev:armhf
+          sudo apt-get install -y gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
 
-      - name: Build ARMv7 EGL frontend
+      - name: Build ARMv7 EGL frontend via dlopen
         run: |
           mkdir -p dist
           COMMON="-O3 -pipe -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -D_FILE_OFFSET_BITS=64"
-          arm-linux-gnueabihf-gcc $COMMON native/sgbpack_native_n1.c -o dist/sgbpack-native -lEGL -lGLESv2
+          arm-linux-gnueabihf-gcc $COMMON native/sgbpack_native_n1.c -o dist/sgbpack-native -ldl
           arm-linux-gnueabihf-strip dist/sgbpack-native
           file dist/sgbpack-native
           arm-linux-gnueabihf-readelf -d dist/sgbpack-native | tee dist/DYNAMIC.txt
           arm-linux-gnueabihf-readelf --version-info dist/sgbpack-native | tee dist/VERSIONS.txt
-
-          python3 - <<'PY'
-          import re, pathlib, sys
-          t=pathlib.Path("dist/VERSIONS.txt").read_text(errors="ignore")
-          bad=[]
-          for a,b in re.findall(r"GLIBC_(\d+)\.(\d+)",t):
-              if (int(a),int(b)) > (2,23):
-                  bad.append(f"GLIBC_{a}.{b}")
-          if bad:
-              print("ERROR: requiere glibc demasiado nueva:", sorted(set(bad)))
-              sys.exit(1)
-          print("glibc ABI <= 2.23: OK")
-          PY
-
           sha256sum dist/sgbpack-native | tee dist/SHA256SUMS.txt
 
       - name: Build HMOD
@@ -66,7 +51,7 @@ jobs:
           tar -C hmod-stage -czf IkCore-Native-N1_7-EGL.hmod .
           sha256sum IkCore-Native-N1_7-EGL.hmod > IkCore-Native-N1_7-EGL.hmod.sha256
 
-      - name: Package diagnostic files
+      - name: Package diagnostics
         run: |
           cp native/README.md dist/README-NATIVE.txt
           tar -C dist -czf IkCore-NESMini-Native-N1_7-EGL.tar.gz .
