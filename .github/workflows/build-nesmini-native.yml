@@ -1,4 +1,4 @@
-name: Build NES Mini Native N1.2
+name: Build NES Mini Native N1.3
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
 
-      - name: Build static ARMv7 N1.2
+      - name: Build static ARMv7 N1.3
         run: |
           mkdir -p dist
           COMMON="-O3 -pipe -static -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -D_FILE_OFFSET_BITS=64"
@@ -31,7 +31,7 @@ jobs:
           arm-linux-gnueabihf-readelf -h dist/sgbpack-native
           arm-linux-gnueabihf-readelf -d dist/sgbpack-native || true
           if arm-linux-gnueabihf-readelf -d dist/sgbpack-native | grep -q NEEDED; then
-            echo "ERROR: N1.2 no es estatico"
+            echo "ERROR: N1.3 no es estatico"
             exit 1
           fi
           sha256sum dist/sgbpack-native | tee dist/SHA256SUMS.txt
@@ -39,10 +39,10 @@ jobs:
       - name: Package
         run: |
           cp native/README.md dist/README-NATIVE.txt
-          tar -C dist -czf IkCore-NESMini-Native-N1_2.tar.gz .
+          tar -C dist -czf IkCore-NESMini-Native-N1_3.tar.gz .
 
       - uses: actions/upload-artifact@v4
         with:
-          name: IkCore-NESMini-Native-N1_2
-          path: IkCore-NESMini-Native-N1_2.tar.gz
+          name: IkCore-NESMini-Native-N1_3
+          path: IkCore-NESMini-Native-N1_3.tar.gz
           if-no-files-found: error
