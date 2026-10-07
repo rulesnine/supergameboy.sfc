@@ -4,17 +4,15 @@
 
 - N0: valida SGBPACK1.
 - N1: framebuffer directo.
-- N1.1: blitter optimizado; ~60 FPS confirmados en hardware real.
-- N1.2: segunda pagina del framebuffer + Clovercon exclusivo; ~60 FPS confirmados, pero Clover siguio repintando.
-- **N1.3 (actual): fullscreen exclusivo**
-  - detecta solo el renderizador de interfaz Clover (ReedPlayer-Clover-nes / clover-ui-nes)
-  - lo pausa con SIGSTOP durante la prueba
-  - usa la segunda pagina del framebuffer
-  - toma Clovercon con EVIOCGRAB
-  - al terminar restaura y envia SIGCONT a Clover
-  - Ctrl+C/SIGTERM salen por ruta de limpieza normal
-
-No mata Clover, no modifica firmware y no toca kernel/bootloader/particiones.
+- N1.1: blitter optimizado; ~60 FPS confirmado.
+- N1.2: segunda pagina + Clovercon exclusivo; ~60 FPS confirmado.
+- N1.3: intento de pausar Clover por nombre; no encontro el proceso real.
+- **N1.4 (actual): diagnostico del propietario de pantalla**
+  - escanea `/proc/*/fd`
+  - lista procesos con `/dev/fb0` o `/dev/disp` abiertos
+  - imprime PID, comm y cmdline
+  - no suspende ningun proceso todavia
+  - mantiene la prueba de video a 60 Hz y Clovercon exclusivo
 
 ## Uso
 
@@ -23,17 +21,11 @@ chmod +x sgbpack-native
 ./sgbpack-native KOF96_SGBPACK_v1_REUPLOAD.sfc
 ```
 
-Durante 10 segundos pulsa botones.
-
-Pasa estas lineas:
+Copia especialmente todas las lineas:
 
 ```text
-Clover STOP : ...
-Clover UI   : procesos suspendidos=...
-pan display : ...
-NATIVE FPS  : ...
-input events: ...
-Clover CONT : ...
+display proc: pid=... comm=[...] cmd=[...]
+display proc count: ...
 ```
 
-Lo importante: confirmar si ahora desaparece completamente el menu mientras corre.
+Con esos nombres/PIDs se prepara N1.5 para pausar solo el renderer correcto, sin tocar procesos críticos.
