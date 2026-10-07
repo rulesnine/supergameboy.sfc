@@ -1,4 +1,4 @@
-name: Build NES Mini Native N1.5 SAFE
+name: Build NES Mini Native N1.6 HMOD
 
 on:
   workflow_dispatch:
@@ -18,31 +18,52 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
 
-      - name: Build static ARMv7 N1.5 SAFE
+      - name: Build static ARMv7
         run: |
           mkdir -p dist
           COMMON="-O3 -pipe -static -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -D_FILE_OFFSET_BITS=64"
           arm-linux-gnueabihf-gcc $COMMON native/sgbpack_native_n1.c -o dist/sgbpack-native
           arm-linux-gnueabihf-strip dist/sgbpack-native
-
-      - name: Verify binary
-        run: |
           file dist/sgbpack-native
-          arm-linux-gnueabihf-readelf -h dist/sgbpack-native
           arm-linux-gnueabihf-readelf -d dist/sgbpack-native || true
           if arm-linux-gnueabihf-readelf -d dist/sgbpack-native | grep -q NEEDED; then
-            echo "ERROR: N1.5 no es estatico"
+            echo "ERROR: binario no estatico"
             exit 1
           fi
           sha256sum dist/sgbpack-native | tee dist/SHA256SUMS.txt
 
-      - name: Package
+      - name: Build Hakchi HMOD
+        run: |
+          rm -rf hmod-stage
+          mkdir -p hmod-stage/bin
+          cp dist/sgbpack-native hmod-stage/bin/sgbpack-native
+          chmod 755 hmod-stage/bin/sgbpack-native
+
+          cat > hmod-stage/install <<'EOF'
+          #!/bin/sh
+          copy "./bin/sgbpack-native" "$rootfs/bin/sgbpack-native"
+          chmod +x "$rootfs/bin/sgbpack-native"
+          EOF
+
+          cat > hmod-stage/uninstall <<'EOF'
+          #!/bin/sh
+          rm -f "$rootfs/bin/sgbpack-native"
+          EOF
+
+          chmod 755 hmod-stage/install hmod-stage/uninstall
+          tar -C hmod-stage -czf IkCore-Native-N1_6.hmod .
+          sha256sum IkCore-Native-N1_6.hmod > IkCore-Native-N1_6.hmod.sha256
+
+      - name: Package standalone too
         run: |
           cp native/README.md dist/README-NATIVE.txt
-          tar -C dist -czf IkCore-NESMini-Native-N1_5_SAFE.tar.gz .
+          tar -C dist -czf IkCore-NESMini-Native-N1_6.tar.gz .
 
       - uses: actions/upload-artifact@v4
         with:
-          name: IkCore-NESMini-Native-N1_5_SAFE
-          path: IkCore-NESMini-Native-N1_5_SAFE.tar.gz
+          name: IkCore-Native-N1_6-HMOD
+          path: |
+            IkCore-Native-N1_6.hmod
+            IkCore-Native-N1_6.hmod.sha256
+            IkCore-NESMini-Native-N1_6.tar.gz
           if-no-files-found: error
