@@ -1,39 +1,41 @@
 # Ik Core Native — NES Mini
 
-Rama experimental para ejecutar **SGBPACK directamente sobre Linux ARMv7 de NES Mini**, sin RetroArch ni libretro.
+Rama experimental para ejecutar SGBPACK directamente sobre Linux ARMv7 de NES Mini, sin RetroArch ni libretro.
 
 ## Estado
 
-- **N0:** validacion directa de SGBPACK1 — completada.
-- **N1:** primer acceso directo a framebuffer/input — completada; detecto 1280x720/32 bpp en hardware real, pero el escalador de diagnostico era demasiado costoso.
-- **N1.1 (actual):** benchmark de video corregido.
-  - limpia toda la pantalla a negro
-  - usa escala entera 3x: 256x224 -> 768x672
-  - centra la imagen
-  - elimina divisiones por pixel
-  - convierte color una sola vez por pixel fuente
-  - replica lineas con memcpy
-  - mide por separado RAW framebuffer y blitter SGB
-  - enumera nombres de dispositivos evdev y registra EV_KEY/EV_ABS
-  - restaura el framebuffer al terminar
-- **N2:** integrar el motor SGB completo de SuperSnes9x/SGBPACK sobre el frontend nativo validado.
-- **N3:** perfilado y optimizacion Cortex-A7 conservando funciones SGB completas.
+- N0: valida SGBPACK1.
+- N1: primer framebuffer directo.
+- N1.1: blitter optimizado; hardware real midio ~60 FPS.
+- N1.2 (actual): prueba de pantalla exclusiva sin detener Clover.
+  - usa la segunda pagina del framebuffer 1280x720 cuando existe
+  - hace `FBIOPAN_DISPLAY` hacia esa pagina
+  - limpia esa pagina a negro antes de mostrarla
+  - dibuja SGB 256x224 a 3x (768x672)
+  - restaura el yoffset original al terminar
+  - identifica `Nintendo Clovercon - controller1`
+  - intenta `EVIOCGRAB` para leer el mando en exclusiva
+  - muestra codigos reales del control
+- N2: integrar el motor SGB completo en este frontend nativo.
+- N3: perfilado/optimizacion Cortex-A7 conservando las funciones SGB.
 
-## Uso N1.1
+## Uso N1.2
 
 ```sh
 chmod +x sgbpack-native
 ./sgbpack-native KOF96_SGBPACK_v1_REUPLOAD.sfc
 ```
 
-La prueba dura aproximadamente 10 segundos. Durante ese tiempo pulsa varios botones del control.
+Durante los 10 segundos pulsa D-pad, A, B, Start y Select.
 
-Al terminar, copiar estas lineas:
+Copiar al final:
 
 ```text
-RAW FPS     : xx.xx
-SGB BLIT FPS: xx.xx
+pan display : ...
+NATIVE FPS  : xx.xx
 input events: n
 ```
 
-Si `SGB BLIT FPS` queda cerca de 60, el camino de video nativo ya no sera el cuello de botella y se puede pasar a N2.
+y todas las lineas `pad event`.
+
+Si la pantalla sigue mezclandose con Clover aun usando la segunda pagina, el siguiente paso sera suspender temporalmente el proceso de Clover durante la ejecucion y reanudarlo al salir.
