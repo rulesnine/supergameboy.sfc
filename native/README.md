@@ -1,32 +1,27 @@
 # Ik Core Native — NES Mini
 
-## Estado
+## Estado confirmado en hardware
+- framebuffer directo: 1280x720, doble pagina 1280x1440
+- blitter 256x224 -> 768x672: ~60 FPS
+- Clovercon directo: /dev/input/event24 + EVIOCGRAB
+- clover-mcp NO debe suspenderse
+- desde shell, Clover sigue componiendo su menu por encima
+- forzar DISP_CMD_LAYER_TOP desde shell devuelve EPERM
 
-- N0: SGBPACK1 validado.
-- N1/N1.1: framebuffer nativo y blitter ~60 FPS.
-- N1.2: segunda pagina + Clovercon exclusivo ~60 FPS.
-- N1.3/N1.4: se descubrio que `clover-mcp` controla `/dev/disp`.
-- Pausar `clover-mcp` congela la consola: **esa ruta queda descartada**.
-- **N1.5 SAFE (actual):** no suspende procesos. Obtiene el layer handle de `/dev/fb0` y usa el display engine sunxi para mover ese layer al frente con `DISP_CMD_LAYER_TOP`.
+## N1.6 — prueba HMOD / ciclo normal de Clover
 
-## Uso
+Esta prueba ya no intenta ganar la pantalla desde una sesion shell. El objetivo es lanzar Ik Core Native como una aplicacion/juego real desde Clover, igual que un emulador normal, para que el propio ciclo de Clover ceda la pantalla.
+
+El HMOD instala:
+
+`/bin/sgbpack-native`
+
+Comando de lanzamiento para el acceso de prueba:
 
 ```sh
-chmod +x sgbpack-native
-./sgbpack-native KOF96_SGBPACK_v1_REUPLOAD.sfc
+/bin/sgbpack-native /var/lib/hakchi/sgb-native-test/KOF96_SGBPACK_v1_REUPLOAD.sfc
 ```
 
-Pasa estas lineas:
+No usa SIGSTOP ni SIGKILL y no modifica kernel, firmware ni particiones.
 
-```text
-fb layer    : ...
-layer prio  : before=...
-layer TOP   : ...
-pan display : ...
-NATIVE FPS  : ...
-input events: ...
-```
-
-Y confirma visualmente si el menu de Clover deja de verse durante los 10 segundos.
-
-Esta prueba no envia SIGSTOP ni SIGKILL a Clover, clover-mcp o kachikachi.
+Si al lanzarlo desde Clover desaparece el menu y queda solo el patron, el frontend nativo queda validado y se pasa a N2: integrar el motor SGB completo.
