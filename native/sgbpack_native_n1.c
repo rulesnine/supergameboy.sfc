@@ -1,25 +1,17 @@
 /*
- * Ik Core Native / NES Mini frontend probe N1.4
+ * Ik Core Native / NES Mini frontend probe N1.5 SAFE
  *
- * Diagnostic fullscreen ownership probe.
+ * Goal: place the existing /dev/fb0 layer above Clover using the sunxi
+ * display engine, without stopping clover-mcp or any other system process.
+ *
  * No RetroArch, no libretro.
- *
- * N1.4:
- * - scans /proc for processes that have /dev/fb0 or /dev/disp open
- * - prints comm/cmdline for those processes
- * - does NOT suspend anything automatically yet
- * - keeps second framebuffer page + Clovercon exclusive input
- * - 60 Hz presentation test
  */
 #define _GNU_SOURCE
-#include <ctype.h>
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <linux/fb.h>
 #include <linux/input.h>
-#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,7 +19,6 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -40,6 +31,10 @@
 #define DRAW_W (SGB_W*SCALE)
 #define DRAW_H (SGB_H*SCALE)
 
+#define FBIOGET_LAYER_HDL_0 0x4700
+#define DISP_CMD_LAYER_TOP 0x56
+#define DISP_CMD_LAYER_GET_PRIO 0x58
+
 typedef struct {
     uint32_t sgb_off, sgb_size;
     uint32_t gb_off, gb_size;
@@ -51,11 +46,11 @@ static uint32_t le32(const unsigned char *p) {
            ((uint32_t)p[2]<<16) | ((uint32_t)p[3]<<24);
 }
 
-static int range_ok(uint64_t off, uint64_t size, uint64_t limit) {
-    return off <= limit && size <= limit - off;
+static int range_ok(uint64_t off,uint64_t size,uint64_t limit) {
+    return off<=limit && size<=limit-off;
 }
 
-static int load_pack_info(const char *path, PackInfo *pi) {
+static int load_pack_info(const char *path,PackInfo *pi) {
     FILE *f;
     struct stat st;
     unsigned char footer[FOOTER_SIZE];
@@ -68,7 +63,7 @@ static int load_pack_info(const char *path, PackInfo *pi) {
     if (!f) return -1;
     footer_off=(uint64_t)st.st_size-FOOTER_SIZE;
     if (fseeko(f,(off_t)footer_off,SEEK_SET)!=0 ||
-        fread(footer,1,FOOTER_SIZE,f)!=FOOTER_SIZE) {
+       fread(footer,1,FOOTER_SIZE,f)!=FOOTER_SIZE) {
         fclose(f);
         return -1;
     }
@@ -115,6 +110,7 @@ static void make_test_frame(uint32_t *frame,unsigned frame_no) {
             uint8_t r=(uint8_t)((x+frame_no*2)&255);
             uint8_t g=(uint8_t)((y+frame_no)&255);
             uint8_t b=(uint8_t)(((x^y)+frame_no*3)&255);
+
             if (x>=48&&x<208&&y>=40&&y<184) {
                 unsigned cell=(unsigned)((x/8+y/8+frame_no/4)&3);
                 static const uint8_t shade[4]={232,176,104,32};
@@ -122,6 +118,7 @@ static void make_test_frame(uint32_t *frame,unsigned frame_no) {
                 g=(uint8_t)(shade[cell]+(cell==0?15:0));
                 b=(uint8_t)(shade[cell]/2);
             }
+
             frame[y*SGB_W+x]=((uint32_t)r<<16)|((uint32_t)g<<8)|b;
         }
     }
@@ -146,11 +143,13 @@ static void blit_3x_32(void *fb,const struct fb_fix_screeninfo *fix,
     for (sy=0;sy<SGB_H;sy++) {
         uint32_t *d=line;
         const uint32_t *s=src+sy*SGB_W;
+
         for (sx=0;sx<SGB_W;sx++) {
             uint32_t c=s[sx];
             uint32_t p=pack_rgb(var,(uint8_t)(c>>16),(uint8_t)(c>>8),(uint8_t)c);
             *d++=p; *d++=p; *d++=p;
         }
+
         for (k=0;k<SCALE;k++) {
             uint8_t *row=(uint8_t*)fb+
                 (size_t)(page_y+oy+sy*SCALE+k)*fix->line_length+
@@ -160,96 +159,16 @@ static void blit_3x_32(void *fb,const struct fb_fix_screeninfo *fix,
     }
 }
 
-static int read_proc_text(pid_t pid,const char *leaf,char *buf,size_t cap) {
-    char path[64];
-    int fd;
-    ssize_t n;
-    snprintf(path,sizeof(path),"/proc/%ld/%s",(long)pid,leaf);
-    fd=open(path,O_RDONLY);
-    if (fd<0) return -1;
-    n=read(fd,buf,cap-1);
-    close(fd);
-    if (n<=0) return -1;
-    buf[n]=0;
-    for (ssize_t i=0;i<n;i++) if (buf[i]=='\0') buf[i]=' ';
-    return 0;
-}
-
-static int process_has_target_fd(pid_t pid,const char *needle) {
-    char dirpath[64];
-    DIR *d;
-    struct dirent *de;
-    int found=0;
-
-    snprintf(dirpath,sizeof(dirpath),"/proc/%ld/fd",(long)pid);
-    d=opendir(dirpath);
-    if (!d) return 0;
-
-    while ((de=readdir(d))!=NULL) {
-        char fdpath[PATH_MAX],target[PATH_MAX];
-        ssize_t n;
-        if (de->d_name[0]=='.') continue;
-        snprintf(fdpath,sizeof(fdpath),"%s/%s",dirpath,de->d_name);
-        n=readlink(fdpath,target,sizeof(target)-1);
-        if (n<=0) continue;
-        target[n]=0;
-        if (strstr(target,needle)) {
-            found=1;
-            break;
-        }
-    }
-
-    closedir(d);
-    return found;
-}
-
-static void print_display_owners(void) {
-    DIR *d=opendir("/proc");
-    struct dirent *de;
-    pid_t self=getpid();
-    int count=0;
-
-    printf("\nDISPLAY OWNERS / CANDIDATES\n");
-    if (!d) {
-        printf("proc scan   : no se pudo abrir /proc\n");
-        return;
-    }
-
-    while ((de=readdir(d))!=NULL) {
-        char *p=de->d_name;
-        int numeric=1;
-        pid_t pid;
-        char comm[256]={0},cmd[1024]={0};
-
-        if (!*p) continue;
-        for (;*p;p++) if (!isdigit((unsigned char)*p)) { numeric=0; break; }
-        if (!numeric) continue;
-
-        pid=(pid_t)strtol(de->d_name,NULL,10);
-        if (pid<=1 || pid==self) continue;
-
-        if (process_has_target_fd(pid,"/dev/fb0") ||
-            process_has_target_fd(pid,"/dev/disp")) {
-            read_proc_text(pid,"comm",comm,sizeof(comm));
-            read_proc_text(pid,"cmdline",cmd,sizeof(cmd));
-            printf("display proc: pid=%ld comm=[%s] cmd=[%s]\n",
-                   (long)pid,comm,cmd);
-            count++;
-        }
-    }
-
-    closedir(d);
-    printf("display proc count: %d\n\n",count);
-}
-
 static int open_clovercon(void) {
     int i;
     for (i=0;i<32;i++) {
         char path[64],name[128]={0};
         int fd;
+
         snprintf(path,sizeof(path),"/dev/input/event%d",i);
         fd=open(path,O_RDONLY|O_NONBLOCK);
         if (fd<0) continue;
+
         ioctl(fd,EVIOCGNAME(sizeof(name)),name);
         if (strstr(name,"Nintendo Clovercon")) {
             printf("controller  : %s [%s]\n",path,name);
@@ -268,7 +187,9 @@ static unsigned poll_pad(int fd) {
     unsigned n=0;
     struct input_event ev[32];
     ssize_t got;
+
     if (fd<0) return 0;
+
     while ((got=read(fd,ev,sizeof(ev)))>0) {
         size_t i,count=(size_t)got/sizeof(ev[0]);
         for (i=0;i<count;i++) {
@@ -279,17 +200,34 @@ static unsigned poll_pad(int fd) {
             }
         }
     }
+
     return n;
+}
+
+static int layer_get_prio(int dispfd,unsigned layer) {
+    unsigned long args[4]={0,0,0,0};
+    args[0]=0;       /* screen 0 */
+    args[1]=layer;
+    return ioctl(dispfd,DISP_CMD_LAYER_GET_PRIO,args);
+}
+
+static int layer_top(int dispfd,unsigned layer) {
+    unsigned long args[4]={0,0,0,0};
+    args[0]=0;       /* screen 0 */
+    args[1]=layer;
+    return ioctl(dispfd,DISP_CMD_LAYER_TOP,args);
 }
 
 int main(int argc,char **argv) {
     PackInfo pi;
-    int fbfd=-1,padfd=-1;
+    int fbfd=-1,dispfd=-1,padfd=-1;
     struct fb_fix_screeninfo fix;
     struct fb_var_screeninfo var,original_var,pan;
     void *fb=MAP_FAILED;
     uint32_t *frame=NULL,*line=NULL;
     unsigned private_y=0,input_events=0,frames=0;
+    unsigned layer=0;
+    int have_layer=0,prio_before=-1,prio_after=-1;
     double t0,end,next,last,fps;
 
     if (argc!=2) {
@@ -301,9 +239,9 @@ int main(int argc,char **argv) {
         return 3;
     }
 
-    printf("Ik Core Native N1.4 - diagnostico propietario de pantalla\n");
+    printf("Ik Core Native N1.5 SAFE - framebuffer layer TOP\n");
     printf("SGBPACK1   : OK\n");
-    print_display_owners();
+    printf("safety      : NO SIGSTOP, NO procesos suspendidos\n");
 
     fbfd=open("/dev/fb0",O_RDWR);
     if (fbfd<0) {
@@ -319,12 +257,35 @@ int main(int argc,char **argv) {
     }
 
     original_var=var;
-    printf("framebuffer: %ux%u virt=%ux%u, %u bpp, yoffset=%u\n",
+    printf("framebuffer : %ux%u virt=%ux%u, %u bpp, yoffset=%u\n",
            var.xres,var.yres,var.xres_virtual,var.yres_virtual,
            var.bits_per_pixel,var.yoffset);
 
+    if (ioctl(fbfd,FBIOGET_LAYER_HDL_0,&layer)==0) {
+        have_layer=1;
+        printf("fb layer    : handle=%u (0x%x)\n",layer,layer);
+    } else {
+        printf("fb layer    : FBIOGET_LAYER_HDL_0 fallo: %s\n",strerror(errno));
+    }
+
+    dispfd=open("/dev/disp",O_RDWR);
+    if (dispfd>=0 && have_layer) {
+        prio_before=layer_get_prio(dispfd,layer);
+        printf("layer prio  : before=%d\n",prio_before);
+
+        if (layer_top(dispfd,layer)==0) {
+            prio_after=layer_get_prio(dispfd,layer);
+            printf("layer TOP   : OK, after=%d\n",prio_after);
+        } else {
+            printf("layer TOP   : FALLO: %s\n",strerror(errno));
+        }
+    } else if (dispfd<0) {
+        printf("/dev/disp   : open fallo: %s\n",strerror(errno));
+    }
+
     if (var.bits_per_pixel!=32 || var.xres<DRAW_W || var.yres<DRAW_H) {
         fprintf(stderr,"ERROR: framebuffer no compatible\n");
+        if (dispfd>=0) close(dispfd);
         close(fbfd);
         return 6;
     }
@@ -336,6 +297,7 @@ int main(int argc,char **argv) {
     fb=mmap(NULL,fix.smem_len,PROT_READ|PROT_WRITE,MAP_SHARED,fbfd,0);
     if (fb==MAP_FAILED) {
         fprintf(stderr,"ERROR mmap: %s\n",strerror(errno));
+        if (dispfd>=0) close(dispfd);
         close(fbfd);
         return 7;
     }
@@ -345,7 +307,9 @@ int main(int argc,char **argv) {
     if (!frame || !line) {
         fprintf(stderr,"ERROR memoria\n");
         free(frame); free(line);
-        munmap(fb,fix.smem_len); close(fbfd);
+        munmap(fb,fix.smem_len);
+        if (dispfd>=0) close(dispfd);
+        close(fbfd);
         return 8;
     }
 
@@ -373,6 +337,7 @@ int main(int argc,char **argv) {
 
     while (now_s()<end) {
         double n=now_s();
+
         if (n<next) {
             struct timespec req;
             double rem=next-n;
@@ -380,6 +345,10 @@ int main(int argc,char **argv) {
             req.tv_nsec=(long)((rem-(double)req.tv_sec)*1e9);
             if (req.tv_nsec>0) nanosleep(&req,NULL);
         }
+
+        /* Keep our fb layer on top in case Clover changes layer ordering. */
+        if (dispfd>=0 && have_layer)
+            layer_top(dispfd,layer);
 
         make_test_frame(frame,frames);
         blit_3x_32(fb,&fix,&var,private_y,frame,line);
@@ -389,7 +358,8 @@ int main(int argc,char **argv) {
 
         n=now_s();
         if (n-last>=1.0) {
-            printf("native FPS  : %.2f (frames=%u)\n",(double)frames/(n-t0),frames);
+            printf("native FPS  : %.2f (frames=%u)\n",
+                   (double)frames/(n-t0),frames);
             fflush(stdout);
             last=n;
         }
@@ -412,8 +382,10 @@ int main(int argc,char **argv) {
     printf("input events: %u\n",input_events);
     printf("display     : restaurado\n");
 
-    free(line); free(frame);
+    free(line);
+    free(frame);
     munmap(fb,fix.smem_len);
+    if (dispfd>=0) close(dispfd);
     close(fbfd);
     return 0;
 }
