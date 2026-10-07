@@ -1,15 +1,19 @@
 /*
- * Ik Core Native / NES Mini frontend probe N1.5 SAFE
+ * Ik Core Native N1.7 — Clover-native EGL lifecycle probe
  *
- * Goal: place the existing /dev/fb0 layer above Clover using the sunxi
- * display engine, without stopping clover-mcp or any other system process.
+ * Purpose:
+ * - launch from Clover/Hakchi as a native application
+ * - acquire display through EGL instead of writing /dev/fb0 directly
+ * - DO NOT open ALSA in this probe
+ * - grab Nintendo Clovercon with evdev
+ * - render a fullscreen moving color-bar test for 10 seconds
+ * - release input + EGL cleanly, then return to Clover
  *
- * No RetroArch, no libretro.
+ * This is intentionally not the SGB engine yet.
  */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
-#include <inttypes.h>
 #include <linux/fb.h>
 #include <linux/input.h>
 #include <stdint.h>
@@ -17,165 +21,58 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
-#define FOOTER_SIZE 0x100u
-#define MAGIC "SGBPACK1"
-#define MAGIC_LEN 8u
-#define SGB_W 256
-#define SGB_H 224
-#define SCALE 3
-#define DRAW_W (SGB_W*SCALE)
-#define DRAW_H (SGB_H*SCALE)
-
-#define FBIOGET_LAYER_HDL_0 0x4700
-#define DISP_CMD_LAYER_TOP 0x56
-#define DISP_CMD_LAYER_GET_PRIO 0x58
+#include <EGL/egl.h>
+#include <GLES2/gl2.h>
 
 typedef struct {
-    uint32_t sgb_off, sgb_size;
-    uint32_t gb_off, gb_size;
-    uint32_t boot_off, boot_size;
-} PackInfo;
-
-static uint32_t le32(const unsigned char *p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1]<<8) |
-           ((uint32_t)p[2]<<16) | ((uint32_t)p[3]<<24);
-}
-
-static int range_ok(uint64_t off,uint64_t size,uint64_t limit) {
-    return off<=limit && size<=limit-off;
-}
-
-static int load_pack_info(const char *path,PackInfo *pi) {
-    FILE *f;
-    struct stat st;
-    unsigned char footer[FOOTER_SIZE];
-    uint64_t footer_off;
-
-    if (stat(path,&st)!=0) return -1;
-    if ((uint64_t)st.st_size<FOOTER_SIZE) return -1;
-
-    f=fopen(path,"rb");
-    if (!f) return -1;
-    footer_off=(uint64_t)st.st_size-FOOTER_SIZE;
-    if (fseeko(f,(off_t)footer_off,SEEK_SET)!=0 ||
-       fread(footer,1,FOOTER_SIZE,f)!=FOOTER_SIZE) {
-        fclose(f);
-        return -1;
-    }
-    fclose(f);
-
-    if (memcmp(footer,MAGIC,MAGIC_LEN)!=0) return -1;
-
-    pi->sgb_off=le32(footer+0x10);
-    pi->sgb_size=le32(footer+0x14);
-    pi->gb_off=le32(footer+0x18);
-    pi->gb_size=le32(footer+0x1c);
-    pi->boot_off=le32(footer+0x20);
-    pi->boot_size=le32(footer+0x24);
-
-    if (!range_ok(pi->sgb_off,pi->sgb_size,footer_off) ||
-        !range_ok(pi->gb_off,pi->gb_size,footer_off) ||
-        !range_ok(pi->boot_off,pi->boot_size,footer_off))
-        return -1;
-    return 0;
-}
+    unsigned short width;
+    unsigned short height;
+} NativeFBWindow;
 
 static double now_s(void) {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC,&ts);
-    return (double)ts.tv_sec+(double)ts.tv_nsec/1e9;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
 }
 
-static uint32_t scale_chan(uint8_t v,uint32_t bits) {
-    if (!bits) return 0;
-    if (bits>=8) return (uint32_t)v<<(bits-8);
-    return (uint32_t)(v>>(8-bits));
-}
+static int get_fb_size(NativeFBWindow *w) {
+    int fd;
+    struct fb_var_screeninfo v;
 
-static uint32_t pack_rgb(const struct fb_var_screeninfo *v,uint8_t r,uint8_t g,uint8_t b) {
-    return (scale_chan(r,v->red.length)<<v->red.offset) |
-           (scale_chan(g,v->green.length)<<v->green.offset) |
-           (scale_chan(b,v->blue.length)<<v->blue.offset);
-}
-
-static void make_test_frame(uint32_t *frame,unsigned frame_no) {
-    int x,y;
-    for (y=0;y<SGB_H;y++) {
-        for (x=0;x<SGB_W;x++) {
-            uint8_t r=(uint8_t)((x+frame_no*2)&255);
-            uint8_t g=(uint8_t)((y+frame_no)&255);
-            uint8_t b=(uint8_t)(((x^y)+frame_no*3)&255);
-
-            if (x>=48&&x<208&&y>=40&&y<184) {
-                unsigned cell=(unsigned)((x/8+y/8+frame_no/4)&3);
-                static const uint8_t shade[4]={232,176,104,32};
-                r=shade[cell];
-                g=(uint8_t)(shade[cell]+(cell==0?15:0));
-                b=(uint8_t)(shade[cell]/2);
-            }
-
-            frame[y*SGB_W+x]=((uint32_t)r<<16)|((uint32_t)g<<8)|b;
-        }
+    fd = open("/dev/fb0", O_RDONLY);
+    if (fd < 0) return -1;
+    if (ioctl(fd, FBIOGET_VSCREENINFO, &v) < 0) {
+        close(fd);
+        return -1;
     }
-}
+    close(fd);
 
-static void clear_page(void *fb,const struct fb_fix_screeninfo *fix,
-                       const struct fb_var_screeninfo *var,unsigned page_y) {
-    unsigned y;
-    for (y=0;y<var->yres;y++) {
-        uint8_t *row=(uint8_t*)fb+(size_t)(page_y+y)*fix->line_length;
-        memset(row,0,fix->line_length);
-    }
-}
-
-static void blit_3x_32(void *fb,const struct fb_fix_screeninfo *fix,
-                       const struct fb_var_screeninfo *var,unsigned page_y,
-                       const uint32_t *src,uint32_t *line) {
-    const unsigned ox=(var->xres-DRAW_W)/2;
-    const unsigned oy=(var->yres-DRAW_H)/2;
-    unsigned sy,sx,k;
-
-    for (sy=0;sy<SGB_H;sy++) {
-        uint32_t *d=line;
-        const uint32_t *s=src+sy*SGB_W;
-
-        for (sx=0;sx<SGB_W;sx++) {
-            uint32_t c=s[sx];
-            uint32_t p=pack_rgb(var,(uint8_t)(c>>16),(uint8_t)(c>>8),(uint8_t)c);
-            *d++=p; *d++=p; *d++=p;
-        }
-
-        for (k=0;k<SCALE;k++) {
-            uint8_t *row=(uint8_t*)fb+
-                (size_t)(page_y+oy+sy*SCALE+k)*fix->line_length+
-                (size_t)ox*4u;
-            memcpy(row,line,DRAW_W*sizeof(uint32_t));
-        }
-    }
+    w->width = (unsigned short)v.xres;
+    w->height = (unsigned short)v.yres;
+    return 0;
 }
 
 static int open_clovercon(void) {
     int i;
-    for (i=0;i<32;i++) {
-        char path[64],name[128]={0};
+    for (i = 0; i < 32; i++) {
+        char path[64];
+        char name[128] = {0};
         int fd;
 
-        snprintf(path,sizeof(path),"/dev/input/event%d",i);
-        fd=open(path,O_RDONLY|O_NONBLOCK);
-        if (fd<0) continue;
+        snprintf(path, sizeof(path), "/dev/input/event%d", i);
+        fd = open(path, O_RDONLY | O_NONBLOCK);
+        if (fd < 0) continue;
 
-        ioctl(fd,EVIOCGNAME(sizeof(name)),name);
-        if (strstr(name,"Nintendo Clovercon")) {
-            printf("controller  : %s [%s]\n",path,name);
-            if (ioctl(fd,EVIOCGRAB,1)==0)
+        ioctl(fd, EVIOCGNAME(sizeof(name)), name);
+        if (strstr(name, "Nintendo Clovercon")) {
+            printf("controller  : %s [%s]\n", path, name);
+            if (ioctl(fd, EVIOCGRAB, 1) == 0)
                 printf("controller  : EVIOCGRAB OK\n");
             else
-                printf("controller  : EVIOCGRAB fallo: %s\n",strerror(errno));
+                printf("controller  : EVIOCGRAB fallo: %s\n", strerror(errno));
             return fd;
         }
         close(fd);
@@ -184,208 +81,219 @@ static int open_clovercon(void) {
 }
 
 static unsigned poll_pad(int fd) {
-    unsigned n=0;
     struct input_event ev[32];
     ssize_t got;
+    unsigned n = 0;
 
-    if (fd<0) return 0;
+    if (fd < 0) return 0;
 
-    while ((got=read(fd,ev,sizeof(ev)))>0) {
-        size_t i,count=(size_t)got/sizeof(ev[0]);
-        for (i=0;i<count;i++) {
-            if (ev[i].type==EV_KEY || ev[i].type==EV_ABS) {
+    while ((got = read(fd, ev, sizeof(ev))) > 0) {
+        size_t i;
+        size_t count = (size_t)got / sizeof(ev[0]);
+        for (i = 0; i < count; i++) {
+            if (ev[i].type == EV_KEY || ev[i].type == EV_ABS) {
                 printf("pad event   : type=%u code=%u value=%d\n",
-                       (unsigned)ev[i].type,(unsigned)ev[i].code,ev[i].value);
+                       (unsigned)ev[i].type,
+                       (unsigned)ev[i].code,
+                       ev[i].value);
                 n++;
             }
         }
     }
-
     return n;
 }
 
-static int layer_get_prio(int dispfd,unsigned layer) {
-    unsigned long args[4]={0,0,0,0};
-    args[0]=0;       /* screen 0 */
-    args[1]=layer;
-    return ioctl(dispfd,DISP_CMD_LAYER_GET_PRIO,args);
+static void draw_test(unsigned frame, int w, int h) {
+    static const GLfloat bars[6][3] = {
+        {0.90f, 0.20f, 0.15f},
+        {0.95f, 0.70f, 0.10f},
+        {0.20f, 0.75f, 0.25f},
+        {0.10f, 0.65f, 0.90f},
+        {0.25f, 0.30f, 0.90f},
+        {0.75f, 0.20f, 0.85f}
+    };
+    int i;
+    int bw = w / 6;
+    int shift = (int)(frame % 6);
+
+    glDisable(GL_DITHER);
+    glEnable(GL_SCISSOR_TEST);
+
+    glScissor(0, 0, w, h);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    for (i = 0; i < 6; i++) {
+        int x = i * bw;
+        int width = (i == 5) ? (w - x) : bw;
+        const GLfloat *c = bars[(i + shift) % 6];
+        glScissor(x, 0, width, h);
+        glClearColor(c[0], c[1], c[2], 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+    }
+
+    /* Black inner rectangle approximating SGB 256x224 aspect. */
+    {
+        int rw = (w * 3) / 5;
+        int rh = (h * 7) / 9;
+        int rx = (w - rw) / 2;
+        int ry = (h - rh) / 2;
+        glScissor(rx, ry, rw, rh);
+        glClearColor(0.02f, 0.02f, 0.02f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+    }
+
+    glDisable(GL_SCISSOR_TEST);
 }
 
-static int layer_top(int dispfd,unsigned layer) {
-    unsigned long args[4]={0,0,0,0};
-    args[0]=0;       /* screen 0 */
-    args[1]=layer;
-    return ioctl(dispfd,DISP_CMD_LAYER_TOP,args);
-}
+int main(int argc, char **argv) {
+    NativeFBWindow native;
+    EGLDisplay display = EGL_NO_DISPLAY;
+    EGLSurface surface = EGL_NO_SURFACE;
+    EGLContext context = EGL_NO_CONTEXT;
+    EGLConfig config;
+    EGLint config_count = 0;
+    int padfd = -1;
+    unsigned events = 0;
+    unsigned frames = 0;
+    double start, last, end, next;
 
-int main(int argc,char **argv) {
-    PackInfo pi;
-    int fbfd=-1,dispfd=-1,padfd=-1;
-    struct fb_fix_screeninfo fix;
-    struct fb_var_screeninfo var,original_var,pan;
-    void *fb=MAP_FAILED;
-    uint32_t *frame=NULL,*line=NULL;
-    unsigned private_y=0,input_events=0,frames=0;
-    unsigned layer=0;
-    int have_layer=0,prio_before=-1,prio_after=-1;
-    double t0,end,next,last,fps;
+    (void)argc;
+    (void)argv;
 
-    if (argc!=2) {
-        fprintf(stderr,"uso: %s archivo_SGBPACK.sfc\n",argv[0]);
-        return 2;
-    }
-    if (load_pack_info(argv[1],&pi)!=0) {
-        fprintf(stderr,"ERROR: SGBPACK1 invalido\n");
-        return 3;
+    printf("Ik Core Native N1.7 - Clover EGL lifecycle\n");
+    printf("audio       : NO se abre ALSA en esta prueba\n");
+
+    if (get_fb_size(&native) != 0) {
+        fprintf(stderr, "ERROR: no se pudo leer /dev/fb0\n");
+        return 10;
     }
 
-    printf("Ik Core Native N1.5 SAFE - framebuffer layer TOP\n");
-    printf("SGBPACK1   : OK\n");
-    printf("safety      : NO SIGSTOP, NO procesos suspendidos\n");
+    printf("display     : %ux%u\n", native.width, native.height);
 
-    fbfd=open("/dev/fb0",O_RDWR);
-    if (fbfd<0) {
-        fprintf(stderr,"ERROR /dev/fb0: %s\n",strerror(errno));
-        return 4;
-    }
+    {
+        static const EGLint cfg_attrs[] = {
+            EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+            EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+            EGL_RED_SIZE, 8,
+            EGL_GREEN_SIZE, 8,
+            EGL_BLUE_SIZE, 8,
+            EGL_ALPHA_SIZE, 8,
+            EGL_NONE
+        };
+        static const EGLint ctx_attrs[] = {
+            EGL_CONTEXT_CLIENT_VERSION, 2,
+            EGL_NONE
+        };
 
-    if (ioctl(fbfd,FBIOGET_FSCREENINFO,&fix)<0 ||
-        ioctl(fbfd,FBIOGET_VSCREENINFO,&var)<0) {
-        fprintf(stderr,"ERROR framebuffer ioctl\n");
-        close(fbfd);
-        return 5;
-    }
-
-    original_var=var;
-    printf("framebuffer : %ux%u virt=%ux%u, %u bpp, yoffset=%u\n",
-           var.xres,var.yres,var.xres_virtual,var.yres_virtual,
-           var.bits_per_pixel,var.yoffset);
-
-    if (ioctl(fbfd,FBIOGET_LAYER_HDL_0,&layer)==0) {
-        have_layer=1;
-        printf("fb layer    : handle=%u (0x%x)\n",layer,layer);
-    } else {
-        printf("fb layer    : FBIOGET_LAYER_HDL_0 fallo: %s\n",strerror(errno));
-    }
-
-    dispfd=open("/dev/disp",O_RDWR);
-    if (dispfd>=0 && have_layer) {
-        prio_before=layer_get_prio(dispfd,layer);
-        printf("layer prio  : before=%d\n",prio_before);
-
-        if (layer_top(dispfd,layer)==0) {
-            prio_after=layer_get_prio(dispfd,layer);
-            printf("layer TOP   : OK, after=%d\n",prio_after);
-        } else {
-            printf("layer TOP   : FALLO: %s\n",strerror(errno));
+        display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+        if (display == EGL_NO_DISPLAY) {
+            fprintf(stderr, "ERROR: eglGetDisplay\n");
+            return 11;
         }
-    } else if (dispfd<0) {
-        printf("/dev/disp   : open fallo: %s\n",strerror(errno));
+
+        if (!eglInitialize(display, NULL, NULL)) {
+            fprintf(stderr, "ERROR: eglInitialize 0x%04x\n", eglGetError());
+            return 12;
+        }
+
+        if (!eglChooseConfig(display, cfg_attrs, &config, 1, &config_count) ||
+            config_count < 1) {
+            fprintf(stderr, "ERROR: eglChooseConfig 0x%04x\n", eglGetError());
+            eglTerminate(display);
+            return 13;
+        }
+
+        surface = eglCreateWindowSurface(display, config,
+                                         (EGLNativeWindowType)&native, NULL);
+        if (surface == EGL_NO_SURFACE) {
+            fprintf(stderr, "ERROR: eglCreateWindowSurface 0x%04x\n", eglGetError());
+            eglTerminate(display);
+            return 14;
+        }
+
+        context = eglCreateContext(display, config, EGL_NO_CONTEXT, ctx_attrs);
+        if (context == EGL_NO_CONTEXT) {
+            fprintf(stderr, "ERROR: eglCreateContext 0x%04x\n", eglGetError());
+            eglDestroySurface(display, surface);
+            eglTerminate(display);
+            return 15;
+        }
+
+        if (!eglMakeCurrent(display, surface, surface, context)) {
+            fprintf(stderr, "ERROR: eglMakeCurrent 0x%04x\n", eglGetError());
+            eglDestroyContext(display, context);
+            eglDestroySurface(display, surface);
+            eglTerminate(display);
+            return 16;
+        }
     }
 
-    if (var.bits_per_pixel!=32 || var.xres<DRAW_W || var.yres<DRAW_H) {
-        fprintf(stderr,"ERROR: framebuffer no compatible\n");
-        if (dispfd>=0) close(dispfd);
-        close(fbfd);
-        return 6;
-    }
+    printf("EGL         : OK\n");
+    printf("GL vendor   : %s\n", (const char *)glGetString(GL_VENDOR));
+    printf("GL renderer : %s\n", (const char *)glGetString(GL_RENDERER));
 
-    private_y=(var.yres_virtual>=var.yres*2)
-        ? ((var.yoffset<var.yres)?var.yres:0)
-        : var.yoffset;
+    glViewport(0, 0, native.width, native.height);
 
-    fb=mmap(NULL,fix.smem_len,PROT_READ|PROT_WRITE,MAP_SHARED,fbfd,0);
-    if (fb==MAP_FAILED) {
-        fprintf(stderr,"ERROR mmap: %s\n",strerror(errno));
-        if (dispfd>=0) close(dispfd);
-        close(fbfd);
-        return 7;
-    }
+    /* 0 = no vsync wait, we pace ourselves at 60 Hz for this probe. */
+    eglSwapInterval(display, 0);
 
-    frame=(uint32_t*)malloc(SGB_W*SGB_H*sizeof(uint32_t));
-    line=(uint32_t*)malloc(DRAW_W*sizeof(uint32_t));
-    if (!frame || !line) {
-        fprintf(stderr,"ERROR memoria\n");
-        free(frame); free(line);
-        munmap(fb,fix.smem_len);
-        if (dispfd>=0) close(dispfd);
-        close(fbfd);
-        return 8;
-    }
+    padfd = open_clovercon();
 
-    clear_page(fb,&fix,&var,private_y);
-
-    pan=var;
-    pan.yoffset=private_y;
-    pan.activate=FB_ACTIVATE_VBL;
-    if (ioctl(fbfd,FBIOPAN_DISPLAY,&pan)==0)
-        printf("pan display : OK -> yoffset=%u\n",private_y);
-    else {
-        printf("pan display : FALLO (%s)\n",strerror(errno));
-        private_y=var.yoffset;
-        clear_page(fb,&fix,&var,private_y);
-    }
-
-    padfd=open_clovercon();
-
-    printf("benchmark   : 10 s @ 60 Hz; pulsa botones\n");
+    printf("benchmark   : 10 s @ objetivo 60 Hz\n");
     fflush(stdout);
 
-    t0=last=now_s();
-    end=t0+10.0;
-    next=t0;
+    start = last = now_s();
+    end = start + 10.0;
+    next = start;
 
-    while (now_s()<end) {
-        double n=now_s();
+    while (now_s() < end) {
+        double n = now_s();
 
-        if (n<next) {
+        if (n < next) {
             struct timespec req;
-            double rem=next-n;
-            req.tv_sec=(time_t)rem;
-            req.tv_nsec=(long)((rem-(double)req.tv_sec)*1e9);
-            if (req.tv_nsec>0) nanosleep(&req,NULL);
+            double rem = next - n;
+            req.tv_sec = (time_t)rem;
+            req.tv_nsec = (long)((rem - (double)req.tv_sec) * 1000000000.0);
+            if (req.tv_nsec > 0) nanosleep(&req, NULL);
         }
 
-        /* Keep our fb layer on top in case Clover changes layer ordering. */
-        if (dispfd>=0 && have_layer)
-            layer_top(dispfd,layer);
+        draw_test(frames, native.width, native.height);
+        if (!eglSwapBuffers(display, surface)) {
+            fprintf(stderr, "ERROR: eglSwapBuffers 0x%04x\n", eglGetError());
+            break;
+        }
 
-        make_test_frame(frame,frames);
-        blit_3x_32(fb,&fix,&var,private_y,frame,line);
-        input_events+=poll_pad(padfd);
+        events += poll_pad(padfd);
         frames++;
-        next+=1.0/60.0;
+        next += 1.0 / 60.0;
 
-        n=now_s();
-        if (n-last>=1.0) {
+        n = now_s();
+        if (n - last >= 1.0) {
             printf("native FPS  : %.2f (frames=%u)\n",
-                   (double)frames/(n-t0),frames);
+                   (double)frames / (n - start), frames);
             fflush(stdout);
-            last=n;
+            last = n;
         }
     }
 
-    fps=(double)frames/(now_s()-t0);
-
-    if (padfd>=0) {
-        ioctl(padfd,EVIOCGRAB,0);
+    if (padfd >= 0) {
+        ioctl(padfd, EVIOCGRAB, 0);
         close(padfd);
     }
 
-    if (ioctl(fbfd,FBIOPAN_DISPLAY,&original_var)==0)
-        printf("restore pan : OK -> yoffset=%u\n",original_var.yoffset);
-    else
-        printf("restore pan : FALLO: %s\n",strerror(errno));
+    /* Clean EGL teardown is the main point of N1.7. */
+    eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    if (context != EGL_NO_CONTEXT) eglDestroyContext(display, context);
+    if (surface != EGL_NO_SURFACE) eglDestroySurface(display, surface);
+    if (display != EGL_NO_DISPLAY) eglTerminate(display);
 
     printf("\nFINAL\n");
-    printf("NATIVE FPS  : %.2f\n",fps);
-    printf("input events: %u\n",input_events);
-    printf("display     : restaurado\n");
+    printf("frames      : %u\n", frames);
+    printf("input events: %u\n", events);
+    printf("EGL         : liberado correctamente\n");
+    printf("audio       : nunca fue abierto por Ik Core\n");
+    fflush(stdout);
 
-    free(line);
-    free(frame);
-    munmap(fb,fix.smem_len);
-    if (dispfd>=0) close(dispfd);
-    close(fbfd);
     return 0;
 }
