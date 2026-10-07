@@ -1,16 +1,15 @@
 /*
- * Ik Core Native / NES Mini frontend probe N1.3
+ * Ik Core Native / NES Mini frontend probe N1.4
  *
- * Fullscreen ownership test for NES Mini Linux.
+ * Diagnostic fullscreen ownership probe.
  * No RetroArch, no libretro.
  *
- * N1.3:
- * - detects and SIGSTOPs only the Clover UI renderer process
- *   (ReedPlayer-Clover-nes / clover-ui-nes match)
- * - uses second framebuffer page when available
- * - grabs Clovercon exclusively
- * - restores framebuffer page and SIGCONTs Clover UI on exit
- * - signal-safe exit path for Ctrl+C / SIGTERM
+ * N1.4:
+ * - scans /proc for processes that have /dev/fb0 or /dev/disp open
+ * - prints comm/cmdline for those processes
+ * - does NOT suspend anything automatically yet
+ * - keeps second framebuffer page + Clovercon exclusive input
+ * - 60 Hz presentation test
  */
 #define _GNU_SOURCE
 #include <ctype.h>
@@ -20,7 +19,7 @@
 #include <inttypes.h>
 #include <linux/fb.h>
 #include <linux/input.h>
-#include <signal.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,20 +39,12 @@
 #define SCALE 3
 #define DRAW_W (SGB_W*SCALE)
 #define DRAW_H (SGB_H*SCALE)
-#define MAX_STOPPED 16
 
 typedef struct {
     uint32_t sgb_off, sgb_size;
     uint32_t gb_off, gb_size;
     uint32_t boot_off, boot_size;
 } PackInfo;
-
-static volatile sig_atomic_t g_stop = 0;
-
-static void on_signal(int sig) {
-    (void)sig;
-    g_stop = 1;
-}
 
 static uint32_t le32(const unsigned char *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1]<<8) |
@@ -184,37 +175,52 @@ static int read_proc_text(pid_t pid,const char *leaf,char *buf,size_t cap) {
     return 0;
 }
 
-static int is_clover_ui_process(pid_t pid,char *desc,size_t cap) {
-    char comm[256]={0},cmd[1024]={0};
-    int match=0;
-
-    read_proc_text(pid,"comm",comm,sizeof(comm));
-    read_proc_text(pid,"cmdline",cmd,sizeof(cmd));
-
-    if (strstr(comm,"ReedPlayer-Clover") ||
-        strstr(cmd,"ReedPlayer-Clover-nes") ||
-        strstr(comm,"clover-ui") ||
-        strstr(cmd,"clover-ui-nes"))
-        match=1;
-
-    if (match) {
-        snprintf(desc,cap,"comm=[%s] cmd=[%s]",comm,cmd);
-    }
-    return match;
-}
-
-static int suspend_clover_ui(pid_t stopped[MAX_STOPPED],char descs[MAX_STOPPED][256]) {
-    DIR *d=opendir("/proc");
+static int process_has_target_fd(pid_t pid,const char *needle) {
+    char dirpath[64];
+    DIR *d;
     struct dirent *de;
-    int n=0;
-    pid_t self=getpid();
+    int found=0;
 
+    snprintf(dirpath,sizeof(dirpath),"/proc/%ld/fd",(long)pid);
+    d=opendir(dirpath);
     if (!d) return 0;
 
-    while ((de=readdir(d))!=NULL && n<MAX_STOPPED) {
+    while ((de=readdir(d))!=NULL) {
+        char fdpath[PATH_MAX],target[PATH_MAX];
+        ssize_t n;
+        if (de->d_name[0]=='.') continue;
+        snprintf(fdpath,sizeof(fdpath),"%s/%s",dirpath,de->d_name);
+        n=readlink(fdpath,target,sizeof(target)-1);
+        if (n<=0) continue;
+        target[n]=0;
+        if (strstr(target,needle)) {
+            found=1;
+            break;
+        }
+    }
+
+    closedir(d);
+    return found;
+}
+
+static void print_display_owners(void) {
+    DIR *d=opendir("/proc");
+    struct dirent *de;
+    pid_t self=getpid();
+    int count=0;
+
+    printf("\nDISPLAY OWNERS / CANDIDATES\n");
+    if (!d) {
+        printf("proc scan   : no se pudo abrir /proc\n");
+        return;
+    }
+
+    while ((de=readdir(d))!=NULL) {
         char *p=de->d_name;
-        pid_t pid;
         int numeric=1;
+        pid_t pid;
+        char comm[256]={0},cmd[1024]={0};
+
         if (!*p) continue;
         for (;*p;p++) if (!isdigit((unsigned char)*p)) { numeric=0; break; }
         if (!numeric) continue;
@@ -222,29 +228,18 @@ static int suspend_clover_ui(pid_t stopped[MAX_STOPPED],char descs[MAX_STOPPED][
         pid=(pid_t)strtol(de->d_name,NULL,10);
         if (pid<=1 || pid==self) continue;
 
-        if (is_clover_ui_process(pid,descs[n],256)) {
-            if (kill(pid,SIGSTOP)==0) {
-                stopped[n]=pid;
-                printf("Clover STOP : pid=%ld %s\n",(long)pid,descs[n]);
-                n++;
-            }
+        if (process_has_target_fd(pid,"/dev/fb0") ||
+            process_has_target_fd(pid,"/dev/disp")) {
+            read_proc_text(pid,"comm",comm,sizeof(comm));
+            read_proc_text(pid,"cmdline",cmd,sizeof(cmd));
+            printf("display proc: pid=%ld comm=[%s] cmd=[%s]\n",
+                   (long)pid,comm,cmd);
+            count++;
         }
     }
 
     closedir(d);
-    return n;
-}
-
-static void resume_clover_ui(pid_t stopped[MAX_STOPPED],int n) {
-    int i;
-    for (i=0;i<n;i++) {
-        if (stopped[i]>1) {
-            if (kill(stopped[i],SIGCONT)==0)
-                printf("Clover CONT : pid=%ld OK\n",(long)stopped[i]);
-            else
-                printf("Clover CONT : pid=%ld fallo: %s\n",(long)stopped[i],strerror(errno));
-        }
-    }
+    printf("display proc count: %d\n\n",count);
 }
 
 static int open_clovercon(void) {
@@ -289,19 +284,13 @@ static unsigned poll_pad(int fd) {
 
 int main(int argc,char **argv) {
     PackInfo pi;
-    int fbfd=-1,padfd=-1,stopped_count=0;
-    pid_t stopped[MAX_STOPPED]={0};
-    char stopped_desc[MAX_STOPPED][256];
+    int fbfd=-1,padfd=-1;
     struct fb_fix_screeninfo fix;
     struct fb_var_screeninfo var,original_var,pan;
     void *fb=MAP_FAILED;
     uint32_t *frame=NULL,*line=NULL;
     unsigned private_y=0,input_events=0,frames=0;
     double t0,end,next,last,fps;
-
-    signal(SIGINT,on_signal);
-    signal(SIGTERM,on_signal);
-    signal(SIGHUP,on_signal);
 
     if (argc!=2) {
         fprintf(stderr,"uso: %s archivo_SGBPACK.sfc\n",argv[0]);
@@ -312,16 +301,13 @@ int main(int argc,char **argv) {
         return 3;
     }
 
-    printf("Ik Core Native N1.3 - fullscreen exclusivo Clover\n");
+    printf("Ik Core Native N1.4 - diagnostico propietario de pantalla\n");
     printf("SGBPACK1   : OK\n");
-
-    stopped_count=suspend_clover_ui(stopped,stopped_desc);
-    printf("Clover UI   : procesos suspendidos=%d\n",stopped_count);
+    print_display_owners();
 
     fbfd=open("/dev/fb0",O_RDWR);
     if (fbfd<0) {
         fprintf(stderr,"ERROR /dev/fb0: %s\n",strerror(errno));
-        resume_clover_ui(stopped,stopped_count);
         return 4;
     }
 
@@ -329,7 +315,6 @@ int main(int argc,char **argv) {
         ioctl(fbfd,FBIOGET_VSCREENINFO,&var)<0) {
         fprintf(stderr,"ERROR framebuffer ioctl\n");
         close(fbfd);
-        resume_clover_ui(stopped,stopped_count);
         return 5;
     }
 
@@ -341,7 +326,6 @@ int main(int argc,char **argv) {
     if (var.bits_per_pixel!=32 || var.xres<DRAW_W || var.yres<DRAW_H) {
         fprintf(stderr,"ERROR: framebuffer no compatible\n");
         close(fbfd);
-        resume_clover_ui(stopped,stopped_count);
         return 6;
     }
 
@@ -353,7 +337,6 @@ int main(int argc,char **argv) {
     if (fb==MAP_FAILED) {
         fprintf(stderr,"ERROR mmap: %s\n",strerror(errno));
         close(fbfd);
-        resume_clover_ui(stopped,stopped_count);
         return 7;
     }
 
@@ -363,7 +346,6 @@ int main(int argc,char **argv) {
         fprintf(stderr,"ERROR memoria\n");
         free(frame); free(line);
         munmap(fb,fix.smem_len); close(fbfd);
-        resume_clover_ui(stopped,stopped_count);
         return 8;
     }
 
@@ -389,7 +371,7 @@ int main(int argc,char **argv) {
     end=t0+10.0;
     next=t0;
 
-    while (!g_stop && now_s()<end) {
+    while (now_s()<end) {
         double n=now_s();
         if (n<next) {
             struct timespec req;
@@ -425,12 +407,9 @@ int main(int argc,char **argv) {
     else
         printf("restore pan : FALLO: %s\n",strerror(errno));
 
-    resume_clover_ui(stopped,stopped_count);
-
     printf("\nFINAL\n");
     printf("NATIVE FPS  : %.2f\n",fps);
     printf("input events: %u\n",input_events);
-    printf("Clover UI   : reanudado\n");
     printf("display     : restaurado\n");
 
     free(line); free(frame);
