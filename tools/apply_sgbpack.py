@@ -2760,8 +2760,13 @@ tail_new = """#ifdef IKCORE_SGB_HYBRID_AUDIO
 \t    impl_->ppu.frame_ready)
 \t{
 """
-sc = replace_once(sc, tail_anchor, tail_new,
-                  "sgb.cpp PERF2 SOU capture tail")
+tail_scope = sc.find("void Emulator::RunCycles(int32_t tcycles)")
+if tail_scope < 0:
+    raise SystemExit("sgb.cpp PERF2: RunCycles scope not found")
+tail_idx = sc.find(tail_anchor, tail_scope)
+if tail_idx < 0:
+    raise SystemExit("sgb.cpp PERF2: SOU capture tail not found in RunCycles")
+sc = sc[:tail_idx] + tail_new + sc[tail_idx + len(tail_anchor):]
 
 pct_commit_anchor = """\t\t++impl_->border_plane;
 \t\tif (cmd == 0x14) ++impl_->border_pct;
@@ -2780,8 +2785,11 @@ pct_commit_new = """\t\t++impl_->border_plane;
 \t\t}
 \t\timpl_->border_capture.stage = Impl::BorderCapture::Idle;
 """
-sc = replace_once(sc, pct_commit_anchor, pct_commit_new,
-                  "sgb.cpp PERF2 atomic PCT commit")
+pct_scope = sc.find("void Emulator::RunCycles(int32_t tcycles)")
+pct_idx = sc.find(pct_commit_anchor, pct_scope)
+if pct_idx < 0:
+    raise SystemExit("sgb.cpp PERF2: atomic PCT commit not found in RunCycles")
+sc = sc[:pct_idx] + pct_commit_new + sc[pct_idx + len(pct_commit_anchor):]
 
 # Use stable border in direct compositor.
 blit_anchor = """\tuint16_t *const staging = impl_->composite;
