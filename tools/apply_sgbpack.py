@@ -1614,3 +1614,42 @@ sc = sc.replace(old1, new1)
 
 SGBCPP.write_text(sc, encoding="utf-8")
 print("IK Core N3.1 full-BIOS fast sync path applied.")
+
+
+# ---- N3.2 remove redundant per-opcode GB sync
+# The pinned cpuexec.cpp currently contains BOTH:
+#   (1) an end-of-every-65816-opcode GB sync, and
+#   (2) a scanline-end GB sync explicitly documented as the replacement for
+#       that old per-opcode hook, with exact ICD2-access syncs in getset.h.
+# Running both defeats the intended batching and is extremely expensive on A7.
+# N3.2 keeps exact catch-up before ICD2 reads/writes and at every scanline end,
+# but suppresses only the redundant opcode-tail call.
+
+CPUX = ROOT / "supersnes9x" / "cpuexec.cpp"
+cx = CPUX.read_text(encoding="utf-8-sig")
+op_sync = """\t\tif (Settings.SGB_BIOSModeActive && S9xSGBBIOSGBIsReleased())
+\t\t\tS9xSGBSyncToSnesCycle(CPU.Cycles);
+\t}
+
+\t// P2 — in BIOS mode the GB core is held in reset until the BIOS
+"""
+op_sync_new = """#ifndef IKCORE_SGB_SCANLINE_SYNC
+\t\tif (Settings.SGB_BIOSModeActive && S9xSGBBIOSGBIsReleased())
+\t\t\tS9xSGBSyncToSnesCycle(CPU.Cycles);
+#endif
+\t}
+
+\t// P2 — in BIOS mode the GB core is held in reset until the BIOS
+"""
+cx = replace_once(cx, op_sync, op_sync_new,
+                  "cpuexec N3.2 suppress redundant per-opcode SGB sync")
+
+# The scanline replacement must exist; fail CI rather than silently building
+# a configuration without guaranteed forward progress.
+scan_guard = """// Per-scanline GB sync in BIOS-released mode. Replaces the
+"""
+if scan_guard not in cx:
+    raise SystemExit("cpuexec.cpp: N3.2 scanline-sync replacement marker missing")
+
+CPUX.write_text(cx, encoding="utf-8")
+print("IK Core N3.2 scanline/ICD2 SGB synchronization applied.")
