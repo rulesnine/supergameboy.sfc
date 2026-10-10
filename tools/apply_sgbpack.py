@@ -3403,3 +3403,37 @@ ac = replace_once(ac,
                  "PERF2 SOU telemetry args")
 APUCPP.write_text(ac, encoding="utf-8")
 print("PERF2 SOU_TRN CHECK: validated atomic sound program transfer.")
+
+
+# ---- IKCORE VERIFIED SGBPACK FIXES: correct packet layouts and timing -------
+# DATA_SND packet: byte1/2 = LE SNES address, byte3 = bank, byte4 = count.
+# Original KOF96 ROM bank4 has eight DATA_SND packets $0810..$0867.
+SGBCPP = ROOT / "supersnes9x" / "sgb" / "sgb.cpp"
+sc = SGBCPP.read_text(encoding="utf-8-sig")
+sc = replace_once(sc,
+    """\t\t\ticd.last_data_snd_bank = pkt[1];
+\t\t\ticd.last_data_snd_addr =
+\t\t\t\tstatic_cast<uint16_t>(pkt[2] | (pkt[3] << 8));""",
+    """\t\t\ticd.last_data_snd_bank = pkt[3];
+\t\t\ticd.last_data_snd_addr =
+\t\t\t\tstatic_cast<uint16_t>(pkt[1] | (pkt[2] << 8));""",
+    "DATA_SND SNES bank and address diagnostics")
+sc = replace_once(sc,
+    """\t\t\ticd.last_data_trn_bank = pkt[1];
+\t\t\ticd.last_data_trn_addr =
+\t\t\t\tstatic_cast<uint16_t>(pkt[2] | (pkt[3] << 8));""",
+    """\t\t\ticd.last_data_trn_bank = pkt[3];
+\t\t\ticd.last_data_trn_addr =
+\t\t\t\tstatic_cast<uint16_t>(pkt[1] | (pkt[2] << 8));""",
+    "DATA_TRN SNES bank and address diagnostics")
+# Nintendo specifies SOU_TRN completes SIX frames after command frame.
+# The next frame_ready may be command frame, hence skip=6 before capturing
+# the sixth frame following the command (one frame already counts as skip).
+sc = replace_once(sc,
+    """\t\timpl_->perf_sou_skip = 1;
+\t\timpl_->ppu.frame_ready = false;""",
+    """\t\timpl_->perf_sou_skip = 6;
+\t\timpl_->ppu.frame_ready = false;""",
+    "SOU_TRN 6-frame transfer completion")
+SGBCPP.write_text(sc, encoding="utf-8")
+print("IKCORE VERIFIED SGBPACK FIXES: DATA_SND map and SOU_TRN timing applied.")
