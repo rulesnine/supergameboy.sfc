@@ -3590,7 +3590,12 @@ static bool ik_audio_frame_active = false;
 static bool ik_audio_warned = false;
 // SFX-only diagnostic. No change to SPC scheduling, mixer, GB frame timing,
 // PCM rate-lock or the original sound-command dispatch sequence.
-static unsigned ik_sfx_trace_count = 0;
+// SGB BIOS uses zero as an explicit effect re-trigger/dummy flag.
+// KOF repeatedly sends the SAME A=0x12 sound while the text is drawn.
+// Preserve the approved #117 threaded-SPC scheduling and original PCM mixer;
+// re-arm only successive identical nonzero A=0x12 commands. Other sounds,
+// port 2 (B effects), attributes and port 0 (music) stay byte-identical.
+static uint8_t ik_last_sfx_a = 0;
 
 static void IkApplySoundEvents()
 {
@@ -3598,23 +3603,13 @@ static void IkApplySoundEvents()
     {
         if (e.type == 0)
         {
-            // Record original SGB SOUND bytes, especially B=0x18 (Writing)
-            // and B=0x19 (Erasing). Limit messages to avoid audio-log spam.
-            if (ik_sfx_trace_count < 32 &&
-                (e.data[0] || e.data[1] || e.data[3]))
-            {
-                char msg[160];
-                snprintf(msg, sizeof(msg),
-                         "IKCORE SFX AUDIT: A=%02x B=%02x attr=%02x score=%02x",
-                         (unsigned)e.data[0], (unsigned)e.data[1],
-                         (unsigned)e.data[2], (unsigned)e.data[3]);
-                S9xMessage(S9X_INFO, S9X_ROM_INFO, msg);
-                ++ik_sfx_trace_count;
-            }
+            if (e.data[0] == 0x12 && ik_last_sfx_a == 0x12)
+                SNES::cpu.port_write(1, 0x00);
             SNES::cpu.port_write(1, e.data[0]);
             SNES::cpu.port_write(2, e.data[1]);
             SNES::cpu.port_write(3, e.data[2]);
             SNES::cpu.port_write(0, e.data[3]);
+            ik_last_sfx_a = e.data[0];
             ++ik_perf_sound_commands;
         }
         else if (e.type == 1 && e.transfer.size() == 4096)
@@ -3727,6 +3722,7 @@ void S9xSGBPerfAudioShutdown(void)
         pthread_join(ik_audio_tid, nullptr);
         ik_audio_thread_ready = false;
     }
+    ik_last_sfx_a = 0;
     ik_audio_pending.clear();
     ik_audio_dispatch.clear();
     ik_audio_stop = false;
