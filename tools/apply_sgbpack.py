@@ -3839,3 +3839,43 @@ cc = replace_once(cc,
     "parallel SPC begin/end sandwich around GB frame")
 CPU.write_text(cc, encoding="utf-8")
 print("IKCORE PARALLEL SPC SAFE DISPATCH: independent SNES audio worker applied.")
+
+
+# ---- Ik Core audio clock stabilization ------------------------------------
+# The old GB APU DRC uses the INTERNAL GB sample ring as rate feedback.
+# In SGB hybrid direct mode the ring is drained every frame; its fill does
+# not measure the external ALSA ring, which is where the observed 7K/8K
+# saturation occurs. That feedback can therefore wind its integral to -3%
+# even while the ALSA queue is overflowing. Freeze this invalid controller
+# *only after* the BIOS->direct handoff and retain the exact nominal SGB1
+# clock. BIOS mode, transitions, SPC700/DSP worker and all rendering remain
+# untouched. This alone does not prove long-term rate match; ALSA logs will
+# reveal whether we subsequently need a pitch-preserving sample-rate bridge.
+
+SGBCPP = ROOT / "supersnes9x" / "sgb" / "sgb.cpp"
+sc = SGBCPP.read_text(encoding="utf-8-sig")
+needle = """\t// Frame-locking pins GB time to the host's frame cadence, not the GB's
+\t// authentic 59.73 Hz, so APU sample production drifts from the host's
+\t// fixed-rate drain; lock production to the drain by steering the APU's
+\t// effective clock until the ring buffer fill holds at its setpoint.
+"""
+replacement = """#ifdef IKCORE_SGB_AUDIO_CLOCK_STABLE
+\t// Retire the internal GB sample-ring DRC ONLY for PERF2 direct mode.
+\t// The mixed output is drained once per frame, so this ring is not an
+\t// ALSA device-fill measurement. Avoid changing the authentic SGB1
+\t// APU clock because of its artificial low-watermark.
+\tif (S9xSGBPerfAudioActive())
+\t{
+\t\timpl_->drc_integ = 0.0;
+\t\tApuSetClockHz(impl_->apu, base_hz);
+\t\treturn;
+\t}
+#endif
+\t// Frame-locking pins GB time to the host's frame cadence, not the GB's
+\t// authentic 59.73 Hz, so APU sample production drifts from the host's
+\t// fixed-rate drain; lock production to the drain by steering the APU's
+\t// effective clock until the ring buffer fill holds at its setpoint.
+"""
+sc=replace_once(sc,needle,replacement,"direct-mode GB APU bogus DRC feedback");
+SGBCPP.write_text(sc,encoding="utf-8")
+print("IKCORE: direct-mode GB APU feedback disabled (nominal SGB1 clock).")
