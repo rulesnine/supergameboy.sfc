@@ -7,6 +7,8 @@ on:
       - 'native/**'
       - 'native_n2/**'
       - 'tools/apply_sgbpack.py'
+      - 'tools/audit_sgbpack_reference.py'
+      - 'tools/test_sgbpack_audit.py'
       - '.github/workflows/build-nesmini-native.yml'
 
 permissions:
@@ -29,6 +31,9 @@ jobs:
           ref: 183e03e5efed3b6d450385c98e2ccffb194153c3
           submodules: false
           path: supersnes9x
+
+      - name: Run private-ROM auditor tests (synthetic, no ROM distributed)
+        run: python3 ikcore-project/tools/test_sgbpack_audit.py
 
       - name: Install host tools
         run: |
