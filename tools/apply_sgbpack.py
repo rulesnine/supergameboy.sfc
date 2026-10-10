@@ -1252,3 +1252,159 @@ gm = replace_once(gm, mbcread_anchor, mbcread_new, "gb_mbc.cpp MBC5 exact hot pa
 GBMBC.write_text(gm, encoding="utf-8")
 
 print("IK Core N2.8 exact MBC5/ROM hot path applied.")
+
+
+# ---- N2.9 exact Mode-3 sprite lookup masks
+# The original dot pipeline linearly scans up to 10 (or 40 with the host
+# override) sprite hits several times per Mode-3 dot. The scanline hit list
+# is already immutable after mode 2, so precompute exact raw-X masks once per
+# line and replace the repeated linear searches with bit operations.
+
+GBPH = ROOT / "supersnes9x" / "sgb" / "gb_ppu.h"
+gh = GBPH.read_text(encoding="utf-8-sig")
+
+sprite_field_anchor = """\tSpriteHit sprites[40];
+\tuint8_t   sprite_count    = 0;
+\tbool      window_active   = false;   // window engaged on this LY
+"""
+sprite_field_new = """\tSpriteHit sprites[40];
+\tuint8_t   sprite_count    = 0;
+#ifdef IKCORE_PPU_SPRITE_MASKS
+\t// Transient per-scanline lookup tables. Bit N corresponds exactly to
+\t// sprites[N] in OAM-scan order. Rebuilt at every mode 2 -> 3 boundary.
+\tuint64_t  sprite_x_mask[256] = {0};
+\tuint64_t  sprite_before_mask[256] = {0};
+#endif
+\tbool      window_active   = false;   // window engaged on this LY
+"""
+gh = replace_once(gh, sprite_field_anchor, sprite_field_new,
+                  "gb_ppu.h sprite lookup masks")
+GBPH.write_text(gh, encoding="utf-8")
+
+GBPPU = ROOT / "supersnes9x" / "sgb" / "gb_ppu.cpp"
+gp = GBPPU.read_text(encoding="utf-8-sig")
+
+eval_anchor = """\tp.sprite_count = 0;
+\tfor (int i = 0; i < 40 && p.sprite_count < limit; ++i)
+"""
+eval_new = """\tp.sprite_count = 0;
+#ifdef IKCORE_PPU_SPRITE_MASKS
+\tstd::memset(p.sprite_x_mask, 0, sizeof p.sprite_x_mask);
+\tstd::memset(p.sprite_before_mask, 0, sizeof p.sprite_before_mask);
+#endif
+\tfor (int i = 0; i < 40 && p.sprite_count < limit; ++i)
+"""
+gp = replace_once(gp, eval_anchor, eval_new, "gb_ppu.cpp sprite-mask reset")
+
+eval_tail_anchor = """\t// The list stays in OAM-scan order: the FIFO's fetch order gives DMG
+\t// X-priority and OAM-index priority naturally (first fetch wins the
+\t// opaque FIFO slots).
+}
+"""
+eval_tail_new = """#ifdef IKCORE_PPU_SPRITE_MASKS
+\tfor (uint8_t i = 0; i < p.sprite_count; ++i)
+\t{
+\t\tconst uint8_t raw = static_cast<uint8_t>(p.sprites[i].x + 8);
+\t\tp.sprite_x_mask[raw] |= (1ull << i);
+\t}
+\tuint64_t before = 0;
+\tfor (int x = 0; x < 256; ++x)
+\t{
+\t\tp.sprite_before_mask[x] = before;
+\t\tbefore |= p.sprite_x_mask[x];
+\t}
+#endif
+
+\t// The list stays in OAM-scan order: the FIFO's fetch order gives DMG
+\t// X-priority and OAM-index priority naturally (first fetch wins the
+\t// opaque FIFO slots).
+}
+"""
+gp = replace_once(gp, eval_tail_anchor, eval_tail_new,
+                  "gb_ppu.cpp sprite-mask build")
+
+discard_anchor = """void SpriteDiscardPassed(const Ppu &p, PixelMachine &m, uint8_t x_match)
+{
+\tfor (uint8_t i = 0; i < p.sprite_count; ++i)
+\t{
+\t\tif (m.sprite_used_mask & (1ull << i)) continue;
+\t\tconst uint8_t raw = static_cast<uint8_t>(p.sprites[i].x + 8);
+\t\tif (raw < x_match) m.sprite_used_mask |= 1ull << i;
+\t}
+}
+"""
+discard_new = """void SpriteDiscardPassed(const Ppu &p, PixelMachine &m, uint8_t x_match)
+{
+#ifdef IKCORE_PPU_SPRITE_MASKS
+\tm.sprite_used_mask |= p.sprite_before_mask[x_match];
+#else
+\tfor (uint8_t i = 0; i < p.sprite_count; ++i)
+\t{
+\t\tif (m.sprite_used_mask & (1ull << i)) continue;
+\t\tconst uint8_t raw = static_cast<uint8_t>(p.sprites[i].x + 8);
+\t\tif (raw < x_match) m.sprite_used_mask |= 1ull << i;
+\t}
+#endif
+}
+"""
+gp = replace_once(gp, discard_anchor, discard_new,
+                  "gb_ppu.cpp discard sprite mask")
+
+match_anchor = """int SpriteMatchAt(const Ppu &p, const PixelMachine &m, uint8_t x_match)
+{
+\tfor (uint8_t i = 0; i < p.sprite_count; ++i)
+\t{
+\t\tif (m.sprite_used_mask & (1ull << i)) continue;
+\t\tif (static_cast<uint8_t>(p.sprites[i].x + 8) == x_match) return i;
+\t}
+\treturn -1;
+}
+"""
+match_new = """int SpriteMatchAt(const Ppu &p, const PixelMachine &m, uint8_t x_match)
+{
+#ifdef IKCORE_PPU_SPRITE_MASKS
+\tconst uint64_t avail = p.sprite_x_mask[x_match] & ~m.sprite_used_mask;
+\tif (!avail) return -1;
+\treturn static_cast<int>(__builtin_ctzll(avail));
+#else
+\tfor (uint8_t i = 0; i < p.sprite_count; ++i)
+\t{
+\t\tif (m.sprite_used_mask & (1ull << i)) continue;
+\t\tif (static_cast<uint8_t>(p.sprites[i].x + 8) == x_match) return i;
+\t}
+\treturn -1;
+#endif
+}
+"""
+gp = replace_once(gp, match_anchor, match_new,
+                  "gb_ppu.cpp exact sprite match mask")
+
+raw0_anchor = """bool SpritePendingAtRaw0(const Ppu &p, const PixelMachine &m)
+{
+\tfor (uint8_t i = 0; i < p.sprite_count; ++i)
+\t{
+\t\tif (m.sprite_used_mask & (1ull << i)) continue;
+\t\tif (static_cast<uint8_t>(p.sprites[i].x + 8) == 0) return true;
+\t}
+\treturn false;
+}
+"""
+raw0_new = """bool SpritePendingAtRaw0(const Ppu &p, const PixelMachine &m)
+{
+#ifdef IKCORE_PPU_SPRITE_MASKS
+\treturn (p.sprite_x_mask[0] & ~m.sprite_used_mask) != 0;
+#else
+\tfor (uint8_t i = 0; i < p.sprite_count; ++i)
+\t{
+\t\tif (m.sprite_used_mask & (1ull << i)) continue;
+\t\tif (static_cast<uint8_t>(p.sprites[i].x + 8) == 0) return true;
+\t}
+\treturn false;
+#endif
+}
+"""
+gp = replace_once(gp, raw0_anchor, raw0_new,
+                  "gb_ppu.cpp raw-X0 sprite mask")
+
+GBPPU.write_text(gp, encoding="utf-8")
+print("IK Core N2.9 exact Mode-3 sprite masks applied.")
