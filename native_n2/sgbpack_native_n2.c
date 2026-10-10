@@ -1,18 +1,18 @@
 /*
- * Ik Core Native A7.3 — fast DMG timing-skeleton specialization + Clover EGL frontend
+ * Ik Core Native PERF1 — direct SGB performance engine + improved audio + border fade
  *
  * Hardware target: NES Classic / NES Mini (ARMv7 Cortex-A7, Mali-400 MP)
  *
- * A7 OPT 3/5 goals:
+ * PERF1 / physical validation 4-of-5 goals:
  * - keep the validated N1.7 Clover EGL lifecycle
  * - dlopen the Ik Core / SuperSnes9x SGBPACK libretro core directly
  * - load the SGBPACK1 test image without RetroArch
  * - render the core's real video through GLES2
  * - keep the complete SNES-side Super Game Boy BIOS path with real audio
- * - remove pixel-value work from the non-emitting DMG timing skeleton
+ * - use Ik Core direct SGB command engine with event-driven DMG rendering
  * - map the Nintendo Clovercon NES pad to libretro joypad input
  *
- * - keep full 256x224 SGB composite output and test real gameplay\n * - allow a clean return with SELECT+START held for 1.5 seconds\n *\n * - preserve every PPU dot/state transition and keep the output machine unchanged\n *\n * Audio remains enabled; compare directly against A7.2.
+ * - keep full 256x224 SGB composite output and test real gameplay\n * - allow a clean return with SELECT+START held for 1.5 seconds\n *\n * - improved buffered ALSA audio; optional GPU-assisted SGB border fade\n *\n * This is the performance architecture, not mGBA and not the full SNES BIOS path.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -36,7 +36,7 @@
 #define IKCORE_CORE_PATH "/usr/lib/ikcore/ikcore_sgbpack_libretro.so"
 #define IKCORE_STATE_DIR "/var/lib/hakchi/sgb-native-test"
 #define IKCORE_DEFAULT_PACK IKCORE_STATE_DIR "/KOF96_SGBPACK_v1_REUPLOAD.sfc"
-#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-a7_3.log"
+#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-perf1.log"
 #define IKCORE_TEST_SECONDS 120.0
 #define IKCORE_EXIT_HOLD_SECONDS 1.5
 
@@ -136,6 +136,14 @@ static unsigned long g_audio_frames_generated = 0;
 static unsigned long g_audio_frames_written = 0;
 static unsigned long g_audio_frames_dropped = 0;
 static unsigned long g_audio_recoveries = 0;
+#define IKCORE_AUDIO_RING_FRAMES 8192u
+#define IKCORE_AUDIO_PREFILL_FRAMES 1024u
+static int16_t g_audio_ring[IKCORE_AUDIO_RING_FRAMES * 2u];
+static size_t g_audio_ring_read = 0;
+static size_t g_audio_ring_write = 0;
+static size_t g_audio_ring_count = 0;
+static size_t g_audio_ring_peak = 0;
+static int g_audio_started = 0;
 
 static EGLDisplay (*p_eglGetDisplay)(EGLNativeDisplayType);
 static EGLBoolean (*p_eglInitialize)(EGLDisplay,EGLint*,EGLint*);
@@ -178,6 +186,7 @@ static void (*p_glTexImage2D)(GLenum,GLint,GLint,GLsizei,GLsizei,GLint,GLenum,GL
 static void (*p_glTexSubImage2D)(GLenum,GLint,GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,const GLvoid*);
 static void (*p_glTexParameteri)(GLenum,GLenum,GLint);
 static void (*p_glUniform1i)(GLint,GLint);
+static void (*p_glUniform1f)(GLint,GLfloat);
 static void (*p_glUseProgram)(GLuint);
 static void (*p_glVertexAttribPointer)(GLuint,GLint,GLenum,GLboolean,GLsizei,const GLvoid*);
 static void (*p_glViewport)(GLint,GLint,GLsizei,GLsizei);
@@ -223,6 +232,7 @@ static void (*p_glViewport)(GLint,GLint,GLsizei,GLsizei);
 #define glTexSubImage2D p_glTexSubImage2D
 #define glTexParameteri p_glTexParameteri
 #define glUniform1i p_glUniform1i
+#define glUniform1f p_glUniform1f
 #define glUseProgram p_glUseProgram
 #define glVertexAttribPointer p_glVertexAttribPointer
 #define glViewport p_glViewport
@@ -241,6 +251,19 @@ static GLuint g_texture = 0;
 static GLint g_attr_pos = -1;
 static GLint g_attr_uv = -1;
 static GLint g_uniform_tex = -1;
+static GLint g_uniform_border_fade = -1;
+static float g_border_fade = 1.0f;
+static uint16_t *g_border_stable = NULL;
+static uint16_t *g_border_mix = NULL;
+static size_t g_border_frame_pixels = 0;
+static uint32_t g_border_hash = 0;
+static uint32_t g_border_pending_hash = 0;
+static unsigned g_border_pending_count = 0;
+static int g_border_have_hash = 0;
+static int g_border_transition = 0;
+static int g_border_step = 0;
+static int g_border_cooldown = 0;
+static unsigned long g_border_transitions = 0;
 static uint8_t *g_rgba = NULL;
 static size_t g_rgba_cap = 0;
 static uint8_t *g_rgb565_pack = NULL;
@@ -421,6 +444,7 @@ static int load_gl(void)
     LOAD_GL(glTexSubImage2D);
     LOAD_GL(glTexParameteri);
     LOAD_GL(glUniform1i);
+    LOAD_GL(glUniform1f);
     LOAD_GL(glUseProgram);
     LOAD_GL(glVertexAttribPointer);
     LOAD_GL(glViewport);
@@ -459,7 +483,12 @@ static int init_video_pipeline(void)
         "precision mediump float;\n"
         "varying vec2 vUV;\n"
         "uniform sampler2D uTex;\n"
-        "void main(){ gl_FragColor=texture2D(uTex,vUV); }\n";
+        "uniform float uBorderFade;\n"
+        "void main(){\n"
+        "  vec4 c=texture2D(uTex,vUV);\n"
+        "  if(vUV.x < 0.1875 || vUV.x >= 0.8125 || vUV.y < 0.1785714 || vUV.y >= 0.8214286) c.rgb*=uBorderFade;\n"
+        "  gl_FragColor=c;\n"
+        "}\n";
     GLuint vs = 0, fs = 0;
     GLint ok = 0;
 
@@ -486,7 +515,9 @@ static int init_video_pipeline(void)
     g_attr_pos = glGetAttribLocation(g_program, "aPos");
     g_attr_uv = glGetAttribLocation(g_program, "aUV");
     g_uniform_tex = glGetUniformLocation(g_program, "uTex");
-    if (g_attr_pos < 0 || g_attr_uv < 0 || g_uniform_tex < 0) goto fail;
+    g_uniform_border_fade = glGetUniformLocation(g_program, "uBorderFade");
+    if (g_attr_pos < 0 || g_attr_uv < 0 || g_uniform_tex < 0 ||
+        g_uniform_border_fade < 0) goto fail;
 
     glGenTextures(1, &g_texture);
     if (!g_texture) goto fail;
@@ -582,6 +613,11 @@ static void destroy_egl(void)
     free(g_rgb565_pack);
     g_rgb565_pack = NULL;
     g_rgb565_pack_cap = 0;
+    free(g_border_stable);
+    g_border_stable = NULL;
+    free(g_border_mix);
+    g_border_mix = NULL;
+    g_border_frame_pixels = 0;
 
     if (g_display != EGL_NO_DISPLAY && eglMakeCurrent)
         eglMakeCurrent(g_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -741,15 +777,46 @@ static void close_alsa(void)
         g_pcm = NULL;
     }
     g_alsa_ready = 0;
+    g_audio_ring_read = g_audio_ring_write = g_audio_ring_count = 0;
+    g_audio_started = 0;
     if (g_libasound) {
         dlclose(g_libasound);
         g_libasound = NULL;
     }
 }
 
+static void audio_ring_flush(void)
+{
+    while (g_alsa_ready && g_pcm && g_audio_ring_count > 0) {
+        size_t contiguous = IKCORE_AUDIO_RING_FRAMES - g_audio_ring_read;
+        snd_pcm_sframes_t wrote;
+        if (contiguous > g_audio_ring_count) contiguous = g_audio_ring_count;
+        wrote = p_snd_pcm_writei(g_pcm,
+                                 &g_audio_ring[g_audio_ring_read * 2u],
+                                 (unsigned long)contiguous);
+        if (wrote == -EAGAIN) return;
+        if (wrote < 0) {
+            if (p_snd_pcm_recover(g_pcm, (int)wrote, 1) >= 0) {
+                g_audio_recoveries++;
+                wrote = p_snd_pcm_writei(g_pcm,
+                                         &g_audio_ring[g_audio_ring_read * 2u],
+                                         (unsigned long)contiguous);
+            }
+        }
+        if (wrote <= 0) return;
+        {
+            size_t n = (size_t)wrote;
+            if (n > contiguous) n = contiguous;
+            g_audio_ring_read = (g_audio_ring_read + n) % IKCORE_AUDIO_RING_FRAMES;
+            g_audio_ring_count -= n;
+            g_audio_frames_written += (unsigned long)n;
+        }
+    }
+}
+
 static size_t audio_batch_cb(const int16_t *data, size_t frames)
 {
-    snd_pcm_sframes_t wrote;
+    size_t i;
     g_audio_frames_generated += (unsigned long)frames;
 
     if (!g_alsa_ready || !g_pcm || !data || frames == 0) {
@@ -757,28 +824,39 @@ static size_t audio_batch_cb(const int16_t *data, size_t frames)
         return frames;
     }
 
-    wrote = p_snd_pcm_writei(g_pcm, data, (unsigned long)frames);
-    if (wrote < 0) {
-        if (wrote == -EAGAIN) {
-            g_audio_frames_dropped += (unsigned long)frames;
-            return frames;
-        }
-        if (p_snd_pcm_recover(g_pcm, (int)wrote, 1) >= 0) {
-            g_audio_recoveries++;
-            wrote = p_snd_pcm_writei(g_pcm, data, (unsigned long)frames);
-        }
+    /* Keep newest sound when the device is temporarily behind: bounded
+       queue avoids both EAGAIN clicks and runaway latency. */
+    if (frames > IKCORE_AUDIO_RING_FRAMES) {
+        size_t skip = frames - IKCORE_AUDIO_RING_FRAMES;
+        data += skip * 2u;
+        frames = IKCORE_AUDIO_RING_FRAMES;
+        g_audio_frames_dropped += (unsigned long)skip;
+    }
+    if (frames > IKCORE_AUDIO_RING_FRAMES - g_audio_ring_count) {
+        size_t discard = frames - (IKCORE_AUDIO_RING_FRAMES - g_audio_ring_count);
+        if (discard > g_audio_ring_count) discard = g_audio_ring_count;
+        g_audio_ring_read = (g_audio_ring_read + discard) % IKCORE_AUDIO_RING_FRAMES;
+        g_audio_ring_count -= discard;
+        g_audio_frames_dropped += (unsigned long)discard;
     }
 
-    if (wrote > 0) {
-        size_t n = (size_t)wrote > frames ? frames : (size_t)wrote;
-        g_audio_frames_written += (unsigned long)n;
-        if (n < frames) g_audio_frames_dropped += (unsigned long)(frames - n);
-    } else {
-        g_audio_frames_dropped += (unsigned long)frames;
+    for (i = 0; i < frames; ++i) {
+        g_audio_ring[g_audio_ring_write * 2u + 0u] = data[i * 2u + 0u];
+        g_audio_ring[g_audio_ring_write * 2u + 1u] = data[i * 2u + 1u];
+        g_audio_ring_write = (g_audio_ring_write + 1u) % IKCORE_AUDIO_RING_FRAMES;
     }
+    g_audio_ring_count += frames;
+    if (g_audio_ring_count > g_audio_ring_peak) g_audio_ring_peak = g_audio_ring_count;
 
-    /* Libretro callback contract: samples were accepted by the frontend.
-       We never block the emulation thread waiting for the ALSA device. */
+    /* ~32 ms prefill absorbs frame-time jitter before starting playback. */
+    if (!g_audio_started) {
+        if (g_audio_ring_count < IKCORE_AUDIO_PREFILL_FRAMES) return frames;
+        g_audio_started = 1;
+    }
+    audio_ring_flush();
+
+    /* Libretro callback contract: the frontend accepted the samples into
+       its bounded queue; emulation never blocks on the ALSA device. */
     return frames;
 }
 
@@ -943,6 +1021,7 @@ static void draw_texture_frame(unsigned w, unsigned h)
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, g_texture);
     glUniform1i(g_uniform_tex, 0);
+    glUniform1f(g_uniform_border_fade, g_border_fade);
     glEnableVertexAttribArray((GLuint)g_attr_pos);
     glEnableVertexAttribArray((GLuint)g_attr_uv);
     glVertexAttribPointer((GLuint)g_attr_pos, 2, GL_FLOAT, GL_FALSE, 0, pos);
@@ -973,6 +1052,124 @@ static const void *pack_rgb565_rows(const void *data, unsigned w, unsigned h, si
     }
 
     return g_rgb565_pack;
+}
+
+static uint32_t border_hash_rgb565(const uint16_t *p, unsigned w, unsigned h)
+{
+    uint32_t hsh = 2166136261u;
+    unsigned x, y;
+    if (!p || w != 256u || h != 224u) return 0;
+    for (y = 0; y < h; y += 2u) {
+        for (x = 0; x < w; x += 2u) {
+            if (x >= 48u && x < 208u && y >= 40u && y < 184u) continue;
+            hsh ^= p[(size_t)y * w + x];
+            hsh *= 16777619u;
+        }
+    }
+    return hsh;
+}
+
+static int ensure_border_buffers(size_t pixels)
+{
+    if (g_border_frame_pixels == pixels && g_border_stable && g_border_mix)
+        return 0;
+    free(g_border_stable);
+    free(g_border_mix);
+    g_border_stable = (uint16_t *)malloc(pixels * sizeof(uint16_t));
+    g_border_mix = (uint16_t *)malloc(pixels * sizeof(uint16_t));
+    if (!g_border_stable || !g_border_mix) {
+        free(g_border_stable); g_border_stable = NULL;
+        free(g_border_mix); g_border_mix = NULL;
+        g_border_frame_pixels = 0;
+        return -1;
+    }
+    g_border_frame_pixels = pixels;
+    g_border_have_hash = 0;
+    g_border_transition = 0;
+    g_border_fade = 1.0f;
+    return 0;
+}
+
+static const uint16_t *apply_border_fade(const uint16_t *cur, unsigned w, unsigned h)
+{
+    size_t pixels = (size_t)w * h;
+    uint32_t hsh;
+    unsigned y;
+    if (!cur || w != 256u || h != 224u) {
+        g_border_fade = 1.0f;
+        return cur;
+    }
+    if (ensure_border_buffers(pixels) != 0) {
+        g_border_fade = 1.0f;
+        return cur;
+    }
+
+    hsh = border_hash_rgb565(cur, w, h);
+    if (!g_border_have_hash) {
+        memcpy(g_border_stable, cur, pixels * sizeof(uint16_t));
+        g_border_hash = hsh;
+        g_border_have_hash = 1;
+        return cur;
+    }
+
+    if (!g_border_transition) {
+        if (g_border_cooldown > 0) g_border_cooldown--;
+        if (hsh != g_border_hash && g_border_cooldown == 0) {
+            if (hsh == g_border_pending_hash) g_border_pending_count++;
+            else {
+                g_border_pending_hash = hsh;
+                g_border_pending_count = 1;
+            }
+            if (g_border_pending_count >= 2u) {
+                g_border_transition = 1;
+                g_border_step = 0;
+                g_border_hash = hsh;
+                g_border_pending_count = 0;
+                g_border_transitions++;
+            }
+        } else if (hsh == g_border_hash) {
+            g_border_pending_count = 0;
+            memcpy(g_border_stable, cur, pixels * sizeof(uint16_t));
+        }
+    }
+
+    if (!g_border_transition) {
+        g_border_fade = 1.0f;
+        return cur;
+    }
+
+    memcpy(g_border_mix, cur, pixels * sizeof(uint16_t));
+    if (g_border_step < 6) {
+        /* Fade the old border to black while the 160x144 game pane stays live. */
+        for (y = 0; y < h; ++y) {
+            if (y < 40u || y >= 184u) {
+                memcpy(g_border_mix + (size_t)y * w,
+                       g_border_stable + (size_t)y * w,
+                       (size_t)w * sizeof(uint16_t));
+            } else {
+                memcpy(g_border_mix + (size_t)y * w,
+                       g_border_stable + (size_t)y * w,
+                       48u * sizeof(uint16_t));
+                memcpy(g_border_mix + (size_t)y * w + 208u,
+                       g_border_stable + (size_t)y * w + 208u,
+                       48u * sizeof(uint16_t));
+            }
+        }
+        g_border_fade = 1.0f - (float)g_border_step / 5.0f;
+    } else {
+        /* New border fades back in from black. */
+        g_border_fade = (float)(g_border_step - 6) / 5.0f;
+    }
+
+    g_border_step++;
+    if (g_border_step >= 12) {
+        g_border_transition = 0;
+        g_border_cooldown = 20;
+        g_border_fade = 1.0f;
+        g_border_hash = hsh;
+        memcpy(g_border_stable, cur, pixels * sizeof(uint16_t));
+    }
+    return g_border_mix;
 }
 
 static void upload_rgb565_direct(const void *data, unsigned w, unsigned h)
@@ -1035,7 +1232,10 @@ static void video_cb(const void *data, unsigned width, unsigned height, size_t p
             g_video_seconds += now_s() - t0;
             return;
         }
-        upload_rgb565_direct(packed, width, height);
+        {
+            const uint16_t *shown = apply_border_fade((const uint16_t *)packed, width, height);
+            upload_rgb565_direct(shown, width, height);
+        }
     } else {
         convert_frame_rgba(data, width, height, pitch);
         if (!g_rgba) {
@@ -1143,10 +1343,10 @@ int main(int argc, char **argv)
 
     log_open();
     pack_path = select_pack_path(argc, argv);
-    log_printf("Ik Core Native A7.3 - fast DMG timing skeleton\n");
+    log_printf("Ik Core Native PERF1 - direct SGB performance engine\n");
     log_printf("audio       : ACTIVADO; salida ALSA real\n");
     log_printf("core        : %s\n", IKCORE_CORE_PATH);
-    log_printf("core mode   : SGB completo + audio real + PPU timing skeleton optimizado\n");
+    log_printf("core mode   : SGB directo propio + PPU por eventos + audio buffered + fade marco\n");
     log_printf("SGBPACK     : %s\n", pack_path);
 
     if (access(pack_path, R_OK) != 0) {
@@ -1212,7 +1412,8 @@ int main(int argc, char **argv)
             log_printf("ALSA        : NO DISPONIBLE; el core sigue generando audio para medirlo\n");
     }
 
-    log_printf("video path  : RGB565 16-bit a Mali; compacta filas solo si pitch > visible\n");
+    log_printf("video path  : RGB565 Mali + fade de borde SGB 12 frames (solo al cambiar marco)\n");
+    log_printf("audio path  : ring 8192 frames, prefill 1024, ALSA nonblocking\n");
     log_printf("play test   : %.0f s a %.3f FPS objetivo\n", IKCORE_TEST_SECONDS, target_fps);
     log_printf("salir       : mantener SELECT+START %.1f s\n", IKCORE_EXIT_HOLD_SECONDS);
 
@@ -1284,7 +1485,7 @@ cleanup:
 
     destroy_egl();
 
-    log_printf("\nFINAL A7.3\n");
+    log_printf("\nFINAL PERF1\n");
     log_printf("runs        : %lu\n", run_frames);
     log_printf("video frames: %lu\n", g_video_frames);
     log_printf("runtime     : %.2f s\n", test_elapsed);
@@ -1312,7 +1513,7 @@ cleanup:
     log_printf("ALSA recover: %lu\n", g_audio_recoveries);
     log_printf("ALSA close  : cerrado limpiamente\n");
     log_printf("EGL         : liberado correctamente\n");
-    log_printf("resultado   : %s\n", success ? "VIDEO SGB OK" : "FALLO; revisar ikcore-a7_3.log");
+    log_printf("resultado   : %s\n", success ? "VIDEO SGB OK" : "FALLO; revisar ikcore-perf1.log");
     log_printf("log         : %s\n", IKCORE_LOG_PATH);
 
     if (g_log) {
@@ -1320,6 +1521,6 @@ cleanup:
         g_log = NULL;
     }
 
-    /* Always return cleanly to Clover for controlled A7.3 exits/errors. */
+    /* Always return cleanly to Clover for controlled PERF1 exits/errors. */
     return 0;
 }
