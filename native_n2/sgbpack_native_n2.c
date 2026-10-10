@@ -1,18 +1,18 @@
 /*
- * Ik Core Native N2.8 — exact MBC5/ROM hot-path diagnostic + Clover EGL frontend
+ * Ik Core Native N2.9 — exact Mode-3 sprite-mask diagnostic + Clover EGL frontend
  *
  * Hardware target: NES Classic / NES Mini (ARMv7 Cortex-A7, Mali-400 MP)
  *
- * N2.8 goals:
+ * N2.9 goals:
  * - keep the validated N1.7 Clover EGL lifecycle
  * - dlopen the Ik Core / SuperSnes9x SGBPACK libretro core directly
  * - load the SGBPACK1 test image without RetroArch
  * - render the core's real video through GLES2
  * - keep ALSA closed (audio disabled at the libretro environment layer)
- * - keep N2.5-N2.7 optimizations and accelerate exact MBC5 ROM fetches
+ * - keep N2.5-N2.8 optimizations and remove repeated Mode-3 sprite scans
  * - map the Nintendo Clovercon NES pad to libretro joypad input
  *
- * - keep full 256x224 SGB composite output and test real gameplay\n * - allow a clean return with SELECT+START held for 1.5 seconds\n *\n * - remove generic mapper/modulo overhead from the KOF96 instruction-fetch hot path\n *\n * Audio remains disabled in N2.8 so ALSA/Clover audio is still isolated.
+ * - keep full 256x224 SGB composite output and test real gameplay\n * - allow a clean return with SELECT+START held for 1.5 seconds\n *\n * - preserve the exact sprite hit order while replacing per-dot linear scans with masks\n *\n * Audio remains disabled in N2.9 so ALSA/Clover audio is still isolated.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -36,7 +36,7 @@
 #define IKCORE_CORE_PATH "/usr/lib/ikcore/ikcore_sgbpack_libretro.so"
 #define IKCORE_STATE_DIR "/var/lib/hakchi/sgb-native-test"
 #define IKCORE_DEFAULT_PACK IKCORE_STATE_DIR "/KOF96_SGBPACK_v1_REUPLOAD.sfc"
-#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-n2_8.log"
+#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-n2_9.log"
 #define IKCORE_TEST_SECONDS 120.0
 #define IKCORE_EXIT_HOLD_SECONDS 1.5
 
@@ -1020,10 +1020,10 @@ int main(int argc, char **argv)
 
     log_open();
     pack_path = select_pack_path(argc, argv);
-    log_printf("Ik Core Native N2.8 - exact MBC5/ROM hot path\n");
+    log_printf("Ik Core Native N2.9 - exact Mode-3 sprite masks\n");
     log_printf("audio       : DESACTIVADO; ALSA no se abre\n");
     log_printf("core        : %s\n", IKCORE_CORE_PATH);
-    log_printf("core mode   : SGB directo + fast paths exactos + MBC5/ROM optimizado\n");
+    log_printf("core mode   : SGB directo + fast paths exactos + Mode-3 sprite masks\n");
     log_printf("SGBPACK     : %s\n", pack_path);
 
     if (access(pack_path, R_OK) != 0) {
@@ -1151,7 +1151,7 @@ cleanup:
 
     destroy_egl();
 
-    log_printf("\nFINAL N2.8\n");
+    log_printf("\nFINAL N2.9\n");
     log_printf("runs        : %lu\n", run_frames);
     log_printf("video frames: %lu\n", g_video_frames);
     log_printf("runtime     : %.2f s\n", test_elapsed);
@@ -1175,7 +1175,7 @@ cleanup:
     log_printf("input events: %lu\n", g_input_events);
     log_printf("audio frames: %lu descartados / ALSA nunca abierto\n", g_audio_frames_discarded);
     log_printf("EGL         : liberado correctamente\n");
-    log_printf("resultado   : %s\n", success ? "VIDEO SGB OK" : "FALLO; revisar ikcore-n2_8.log");
+    log_printf("resultado   : %s\n", success ? "VIDEO SGB OK" : "FALLO; revisar ikcore-n2_9.log");
     log_printf("log         : %s\n", IKCORE_LOG_PATH);
 
     if (g_log) {
@@ -1183,6 +1183,6 @@ cleanup:
         g_log = NULL;
     }
 
-    /* Always return cleanly to Clover for controlled N2.8 exits/errors. */
+    /* Always return cleanly to Clover for controlled N2.9 exits/errors. */
     return 0;
 }
