@@ -1,9 +1,9 @@
 /*
- * Ik Core Native N2 — direct libretro SGB engine + Clover EGL frontend
+ * Ik Core Native N2.1 — optimized direct SGB engine + Clover EGL frontend
  *
  * Hardware target: NES Classic / NES Mini (ARMv7 Cortex-A7, Mali-400 MP)
  *
- * N2 goals:
+ * N2.1 goals:
  * - keep the validated N1.7 Clover EGL lifecycle
  * - dlopen the Ik Core / SuperSnes9x SGBPACK libretro core directly
  * - load the SGBPACK1 test image without RetroArch
@@ -36,7 +36,7 @@
 #define IKCORE_CORE_PATH "/usr/lib/ikcore/ikcore_sgbpack_libretro.so"
 #define IKCORE_STATE_DIR "/var/lib/hakchi/sgb-native-test"
 #define IKCORE_DEFAULT_PACK IKCORE_STATE_DIR "/KOF96_SGBPACK_v1_REUPLOAD.sfc"
-#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-n2.log"
+#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-n2_1.log"
 #define IKCORE_BENCH_SECONDS 10.0
 
 /* Minimal EGL declarations, loaded dynamically just like N1.7. */
@@ -88,8 +88,10 @@ typedef ptrdiff_t GLsizeiptr;
 #define GL_DITHER 0x0BD0
 #define GL_TEXTURE_2D 0x0DE1
 #define GL_TEXTURE0 0x84C0
+#define GL_RGB 0x1907
 #define GL_RGBA 0x1908
 #define GL_UNSIGNED_BYTE 0x1401
+#define GL_UNSIGNED_SHORT_5_6_5 0x8363
 #define GL_FLOAT 0x1406
 #define GL_TRIANGLE_STRIP 0x0005
 #define GL_VERTEX_SHADER 0x8B31
@@ -149,6 +151,7 @@ static GLint (*p_glGetUniformLocation)(GLuint,const GLchar*);
 static void (*p_glLinkProgram)(GLuint);
 static void (*p_glShaderSource)(GLuint,GLsizei,const GLchar* const*,const GLint*);
 static void (*p_glTexImage2D)(GLenum,GLint,GLint,GLsizei,GLsizei,GLint,GLenum,GLenum,const GLvoid*);
+static void (*p_glTexSubImage2D)(GLenum,GLint,GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,const GLvoid*);
 static void (*p_glTexParameteri)(GLenum,GLenum,GLint);
 static void (*p_glUniform1i)(GLint,GLint);
 static void (*p_glUseProgram)(GLuint);
@@ -193,6 +196,7 @@ static void (*p_glViewport)(GLint,GLint,GLsizei,GLsizei);
 #define glLinkProgram p_glLinkProgram
 #define glShaderSource p_glShaderSource
 #define glTexImage2D p_glTexImage2D
+#define glTexSubImage2D p_glTexSubImage2D
 #define glTexParameteri p_glTexParameteri
 #define glUniform1i p_glUniform1i
 #define glUseProgram p_glUseProgram
@@ -218,10 +222,14 @@ static size_t g_rgba_cap = 0;
 static enum retro_pixel_format g_pixel_format = RETRO_PIXEL_FORMAT_0RGB1555;
 static unsigned g_frame_w = 0;
 static unsigned g_frame_h = 0;
+static unsigned g_tex_w = 0;
+static unsigned g_tex_h = 0;
+static int g_tex_rgb565 = 0;
 static float g_core_aspect = 4.0f / 3.0f;
 static unsigned long g_video_frames = 0;
 static unsigned long g_audio_frames_discarded = 0;
 static unsigned long g_input_events = 0;
+static double g_video_seconds = 0.0;
 static int g_swap_failed = 0;
 static int g_shutdown_requested = 0;
 static int g_padfd = -1;
@@ -366,6 +374,7 @@ static int load_gl(void)
     LOAD_GL(glLinkProgram);
     LOAD_GL(glShaderSource);
     LOAD_GL(glTexImage2D);
+    LOAD_GL(glTexSubImage2D);
     LOAD_GL(glTexParameteri);
     LOAD_GL(glUniform1i);
     LOAD_GL(glUseProgram);
@@ -751,7 +760,7 @@ static void convert_frame_rgba(const void *data, unsigned w, unsigned h, size_t 
     }
 }
 
-static void draw_rgba_frame(unsigned w, unsigned h)
+static void draw_texture_frame(unsigned w, unsigned h)
 {
     /* Triangle strip, vertically flipped so top row remains top on screen. */
     static const GLfloat pos[] = {
@@ -786,8 +795,6 @@ static void draw_rgba_frame(unsigned w, unsigned h)
     glUseProgram(g_program);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, g_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, (GLsizei)w, (GLsizei)h, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, g_rgba);
     glUniform1i(g_uniform_tex, 0);
     glEnableVertexAttribArray((GLuint)g_attr_pos);
     glEnableVertexAttribArray((GLuint)g_attr_uv);
@@ -796,27 +803,76 @@ static void draw_rgba_frame(unsigned w, unsigned h)
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
+static void upload_rgb565_direct(const void *data, unsigned w, unsigned h)
+{
+    glBindTexture(GL_TEXTURE_2D, g_texture);
+    if (g_tex_w != w || g_tex_h != h || !g_tex_rgb565) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, (GLsizei)w, (GLsizei)h, 0,
+                     GL_RGB, GL_UNSIGNED_SHORT_5_6_5, data);
+        g_tex_w = w;
+        g_tex_h = h;
+        g_tex_rgb565 = 1;
+    } else {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, (GLsizei)w, (GLsizei)h,
+                        GL_RGB, GL_UNSIGNED_SHORT_5_6_5, data);
+    }
+}
+
+static void upload_rgba_fallback(unsigned w, unsigned h)
+{
+    glBindTexture(GL_TEXTURE_2D, g_texture);
+    if (g_tex_w != w || g_tex_h != h || g_tex_rgb565) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, (GLsizei)w, (GLsizei)h, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, g_rgba);
+        g_tex_w = w;
+        g_tex_h = h;
+        g_tex_rgb565 = 0;
+    } else {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, (GLsizei)w, (GLsizei)h,
+                        GL_RGBA, GL_UNSIGNED_BYTE, g_rgba);
+    }
+}
+
 static void video_cb(const void *data, unsigned width, unsigned height, size_t pitch)
 {
+    double t0 = now_s();
+
     if (!data || width == 0 || height == 0) {
-        /* libretro duplicate frame: redraw the previous texture before swap. */
-        if (g_rgba && g_frame_w && g_frame_h)
-            draw_rgba_frame(g_frame_w, g_frame_h);
+        /* libretro duplicate frame: redraw the already uploaded texture. */
+        if (g_frame_w && g_frame_h)
+            draw_texture_frame(g_frame_w, g_frame_h);
         if (!eglSwapBuffers(g_display, g_surface)) g_swap_failed = 1;
         g_video_frames++;
+        g_video_seconds += now_s() - t0;
         return;
     }
 
-    convert_frame_rgba(data, width, height, pitch);
-    if (!g_rgba) return;
     g_frame_w = width;
     g_frame_h = height;
-    draw_rgba_frame(width, height);
+
+    /*
+     * N2.1 fast path: SuperSnes9x requests RGB565 (pixel fmt=2) and normally
+     * emits a tightly packed 256x224 surface. Feed those 16-bit pixels straight
+     * to Mali instead of expanding every pixel to RGBA on the Cortex-A7.
+     */
+    if (g_pixel_format == RETRO_PIXEL_FORMAT_RGB565 && pitch == (size_t)width * 2u) {
+        upload_rgb565_direct(data, width, height);
+    } else {
+        convert_frame_rgba(data, width, height, pitch);
+        if (!g_rgba) {
+            g_video_seconds += now_s() - t0;
+            return;
+        }
+        upload_rgba_fallback(width, height);
+    }
+
+    draw_texture_frame(width, height);
     if (!eglSwapBuffers(g_display, g_surface)) {
         log_printf("ERROR EGL  : eglSwapBuffers 0x%04x\n", eglGetError());
         g_swap_failed = 1;
     }
     g_video_frames++;
+    g_video_seconds += now_s() - t0;
 }
 
 static int load_core(void)
@@ -863,14 +919,14 @@ int main(int argc, char **argv)
     struct retro_system_info sysinfo;
     struct retro_system_av_info avinfo;
     struct retro_game_info game;
-    double start = 0.0, last = 0.0, end = 0.0;
+    double start = 0.0, last = 0.0, end = 0.0, bench_elapsed = 0.0;
     unsigned long run_frames = 0;
     int core_inited = 0;
     int game_loaded = 0;
     int success = 0;
 
     log_open();
-    log_printf("Ik Core Native N2 - SGB engine / EGL benchmark\n");
+    log_printf("Ik Core Native N2.1 - optimized SGB engine / EGL benchmark\n");
     log_printf("audio       : DESACTIVADO; ALSA no se abre\n");
     log_printf("core        : %s\n", IKCORE_CORE_PATH);
     log_printf("SGBPACK     : %s\n", pack_path);
@@ -924,7 +980,10 @@ int main(int argc, char **argv)
                (double)g_core_aspect);
     log_printf("timing      : %.3f fps / %.0f Hz audio (audio descartado)\n",
                avinfo.timing.fps, avinfo.timing.sample_rate);
-    log_printf("benchmark   : %.0f s SIN limitador, motor SGB completo\n", IKCORE_BENCH_SECONDS);
+    log_printf("video path  : RGB565 directo a Mali + textura persistente
+");
+    log_printf("benchmark   : %.0f s SIN limitador, motor SGB completo
+", IKCORE_BENCH_SECONDS);
 
     start = last = now_s();
     end = start + IKCORE_BENCH_SECONDS;
@@ -940,6 +999,7 @@ int main(int argc, char **argv)
         }
     }
 
+    bench_elapsed = now_s() - start;
     success = (run_frames > 0 && g_video_frames > 0 && !g_swap_failed);
 
 cleanup:
@@ -955,7 +1015,7 @@ cleanup:
 
     destroy_egl();
 
-    log_printf("\nFINAL N2\n");
+    log_printf("\nFINAL N2.1\n");
     log_printf("runs        : %lu\n", run_frames);
     log_printf("video frames: %lu\n", g_video_frames);
     if (start > 0.0) {
@@ -967,7 +1027,7 @@ cleanup:
     log_printf("input events: %lu\n", g_input_events);
     log_printf("audio frames: %lu descartados / ALSA nunca abierto\n", g_audio_frames_discarded);
     log_printf("EGL         : liberado correctamente\n");
-    log_printf("resultado   : %s\n", success ? "VIDEO SGB OK" : "FALLO; revisar ikcore-n2.log");
+    log_printf("resultado   : %s\n", success ? "VIDEO SGB OK" : "FALLO; revisar ikcore-n2_1.log");
     log_printf("log         : %s\n", IKCORE_LOG_PATH);
 
     if (g_log) {
