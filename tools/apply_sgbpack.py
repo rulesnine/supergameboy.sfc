@@ -1191,13 +1191,13 @@ print("IK Core N2.7 exact PPU idle batching applied.")
 GBMBC = ROOT / "supersnes9x" / "sgb" / "gb_mbc.cpp"
 gm = GBMBC.read_text(encoding="utf-8-sig")
 
-readrom_anchor = """inline uint8_t ReadRom(const std::vector<uint8_t> &rom, uint32_t offset)
+readrom_anchor = """inline uint32_t ReadRom(const std::vector<uint8_t> &rom, uint32_t offset)
 {
 \tif (rom.empty()) return 0xFF;
 \treturn rom[offset % rom.size()];
 }
 """
-readrom_new = """inline uint8_t ReadRom(const std::vector<uint8_t> &rom, uint32_t offset)
+readrom_new = """inline uint32_t ReadRom(const std::vector<uint8_t> &rom, uint32_t offset)
 {
 \tif (rom.empty()) return 0xFF;
 #ifdef IKCORE_MBC5_FAST
