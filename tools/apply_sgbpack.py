@@ -1182,3 +1182,73 @@ gp = replace_once(gp, ppu_anchor, ppu_new, "gb_ppu.cpp idle-mode batching")
 GBPPU.write_text(gp, encoding="utf-8")
 
 print("IK Core N2.7 exact PPU idle batching applied.")
+
+
+# ---- N2.8 exact MBC5 / power-of-two ROM hot path
+# KOF96 is a 1 MiB MBC5 cart. Preserve mapper behavior exactly while avoiding
+# the generic multi-mapper decision tree and integer modulo on every ROM fetch.
+
+GBMBC = ROOT / "supersnes9x" / "sgb" / "gb_mbc.cpp"
+gm = GBMBC.read_text(encoding="utf-8-sig")
+
+readrom_anchor = """inline uint8_t ReadRom(const std::vector<uint8_t> &rom, uint32_t offset)
+{
+\tif (rom.empty()) return 0xFF;
+\treturn rom[offset % rom.size()];
+}
+"""
+readrom_new = """inline uint8_t ReadRom(const std::vector<uint8_t> &rom, uint32_t offset)
+{
+\tif (rom.empty()) return 0xFF;
+#ifdef IKCORE_MBC5_FAST
+\t// Most licensed GB ROMs, including this 1 MiB KOF96 image, are a
+\t// power-of-two size. For those carts x % size is exactly x & (size-1),
+\t// avoiding ARM's integer-divide helper in the instruction-fetch path.
+\tconst size_t n = rom.size();
+\tif ((n & (n - 1)) == 0)
+\t\treturn rom[static_cast<size_t>(offset) & (n - 1)];
+#endif
+\treturn rom[offset % rom.size()];
+}
+"""
+gm = replace_once(gm, readrom_anchor, readrom_new, "gb_mbc.cpp power-of-two ROM fast path")
+
+mbcread_anchor = """uint8_t MbcRead(MbcState &s, const std::vector<uint8_t> &rom, const std::vector<uint8_t> &sram, uint16_t addr, bool mbc1_multicart, MbcUnl *unl)
+{
+\tif (s.type == MbcType::MBC6)
+\t\treturn Mbc6Read(s, rom, sram, addr);
+"""
+mbcread_new = """uint8_t MbcRead(MbcState &s, const std::vector<uint8_t> &rom, const std::vector<uint8_t> &sram, uint16_t addr, bool mbc1_multicart, MbcUnl *unl)
+{
+\tif (s.type == MbcType::MBC6)
+\t\treturn Mbc6Read(s, rom, sram, addr);
+
+#ifdef IKCORE_MBC5_FAST
+\t// Exact fast path for ordinary MBC5. BBD/Hitek/Sintax/etc. use distinct
+\t// MbcType values and therefore stay on the full generic path below.
+\t// Mbc5MultiBank preserves the 23-in-1 outer mask/base behavior.
+\tif (s.type == MbcType::MBC5)
+\t{
+\t\tif (addr < 0x4000)
+\t\t{
+\t\t\tconst uint32_t bank = Mbc5MultiBank(s, 0);
+\t\t\treturn ReadRom(rom, bank * 0x4000u + addr);
+\t\t}
+\t\tif (addr < 0x8000)
+\t\t{
+\t\t\tconst uint32_t bank = Mbc5MultiBank(s, s.rom_bank);
+\t\t\treturn ReadRom(rom, bank * 0x4000u + (addr - 0x4000u));
+\t\t}
+\t\tif (addr >= 0xA000 && addr < 0xC000)
+\t\t{
+\t\t\tconst uint32_t bank = s.ram_bank & 0x0F;
+\t\t\treturn ReadSram(sram, bank * 0x2000u + (addr - 0xA000u));
+\t\t}
+\t\treturn 0xFF;
+\t}
+#endif
+"""
+gm = replace_once(gm, mbcread_anchor, mbcread_new, "gb_mbc.cpp MBC5 exact hot path")
+GBMBC.write_text(gm, encoding="utf-8")
+
+print("IK Core N2.8 exact MBC5/ROM hot path applied.")
