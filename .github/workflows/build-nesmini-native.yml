@@ -1,4 +1,4 @@
-name: Build NES Mini PERF2 Parallel SPC Candidate (NO DEVICE TEST)
+name: Build NES Mini PERF2 PCM Rate Lock Candidate (NO DEVICE TEST)
 
 on:
   workflow_dispatch:
@@ -9,6 +9,7 @@ on:
       - 'tools/apply_sgbpack.py'
       - 'tools/audit_sgbpack_reference.py'
       - 'tools/test_sgbpack_audit.py'
+      - 'tools/test_audio_rate_lock.py'
       - '.github/workflows/build-nesmini-native.yml'
 
 permissions:
@@ -34,6 +35,9 @@ jobs:
 
       - name: Run private-ROM auditor tests (synthetic, no ROM distributed)
         run: python3 ikcore-project/tools/test_sgbpack_audit.py
+
+      - name: Check SGB direct-mode PCM output clock and long-term drift
+        run: python3 ikcore-project/tools/test_audio_rate_lock.py
 
       - name: Install host tools
         run: |
@@ -97,8 +101,9 @@ jobs:
           cd supersnes9x
           git diff --check
           grep -q "Ik Core loaded SGBPACK1" memmap.cpp
+          grep -q 'IKCORE_SGB_PERF_AUDIO_RATE_LOCK' sgb/sgb.cpp
 
-      - name: Build PERF2 parallel SPC direct SGB core for ARMv7
+      - name: Build PERF2 parallel SPC with rate-locked GB APU direct SGB core for ARMv7
         working-directory: supersnes9x/libretro
         run: |
           set -e
@@ -110,11 +115,11 @@ jobs:
             AR="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar" \
             STRIP="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-strip" \
             HAVE_UNZIP=0 \
-            CPPFLAGS="-DSGBPACK_LITE -DIKCORE_GB_FAST_IDLE -DIKCORE_PPU_IDLE_FAST -DIKCORE_MBC5_FAST -DIKCORE_FIXED_ACID_KNOBS -DIKCORE_SGB_PERF_PPU -DIKCORE_SGB_HYBRID_AUDIO -DIKCORE_SGB_LAZY_APU -DIKCORE_SGB_PERF_AUDIO_THREADED" \
+            CPPFLAGS="-DSGBPACK_LITE -DIKCORE_GB_FAST_IDLE -DIKCORE_PPU_IDLE_FAST -DIKCORE_MBC5_FAST -DIKCORE_FIXED_ACID_KNOBS -DIKCORE_SGB_PERF_PPU -DIKCORE_SGB_HYBRID_AUDIO -DIKCORE_SGB_LAZY_APU -DIKCORE_SGB_PERF_AUDIO_THREADED -DIKCORE_SGB_PERF_AUDIO_RATE_LOCK" \
             LDFLAGS="-flto=4 -pthread -static-libgcc -static-libstdc++" \
             LIBS="$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6"
 
-      - name: Verify and stage PERF2 parallel SPC SGB core
+      - name: Verify and stage PERF2 parallel SPC with rate-locked GB APU SGB core
         working-directory: supersnes9x/libretro
         run: |
           set -e
@@ -144,12 +149,12 @@ jobs:
             exit 1
           fi
 
-          echo "CORE MODE: UNVERIFIED - separate SPC audio worker + queued SGB commands; stable graphics and fade untouched" >> "$GITHUB_WORKSPACE/dist/CORE-VERIFY.txt"
+          echo "CORE MODE: UNVERIFIED - 32040Hz direct APU rate lock + parallel SPC; graphics and fade unchanged" >> "$GITHUB_WORKSPACE/dist/CORE-VERIFY.txt"
           cp "$CORE" "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so"
           "$STRIP" --strip-unneeded "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so"
           sha256sum "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so" > "$GITHUB_WORKSPACE/dist/SHA256-core.txt"
 
-      - name: Build PERF2 parallel SPC EGL frontend
+      - name: Build PERF2 parallel SPC with rate-locked GB APU EGL frontend
         run: |
           set -e
           CC="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc"
@@ -192,7 +197,7 @@ jobs:
           "$STRIP" --strip-unneeded "$GITHUB_WORKSPACE/dist/sgbpack-native-n2"
           sha256sum "$GITHUB_WORKSPACE/dist/sgbpack-native-n2" > "$GITHUB_WORKSPACE/dist/SHA256-frontend.txt"
 
-      - name: Package PERF2 parallel SPC HMOD (not validated)
+      - name: Package PERF2 parallel SPC with rate-locked GB APU HMOD (not validated)
         run: |
           set -e
           rm -rf hmod-stage
@@ -227,21 +232,21 @@ jobs:
           EOF
 
           chmod 755 hmod-stage/install hmod-stage/uninstall
-          tar -C hmod-stage -czf IkCore-Native-PERF2-AUDIO-AUDIT.hmod .
-          sha256sum IkCore-Native-PERF2-AUDIO-AUDIT.hmod > IkCore-Native-PERF2-AUDIO-AUDIT.hmod.sha256
+          tar -C hmod-stage -czf IkCore-Native-PERF2-AUDIO-RATE-LOCK.hmod .
+          sha256sum IkCore-Native-PERF2-AUDIO-RATE-LOCK.hmod > IkCore-Native-PERF2-AUDIO-RATE-LOCK.hmod.sha256
 
       - name: Package diagnostics
         run: |
           cp ikcore-project/native_n2/README.md dist/README-PERF2.txt
-          tar -C dist -czf IkCore-Native-PERF2-diagnostics.tar.gz .
+          tar -C dist -czf IkCore-Native-PERF2-AUDIO-RATE-LOCK-diagnostics.tar.gz .
 
-      - name: Upload PERF2 parallel SPC artifact (not validated)
+      - name: Upload PERF2 parallel SPC with rate-locked GB APU artifact (not validated)
         uses: actions/upload-artifact@v4
         with:
-          name: IkCore-Native-PERF2-PARALLEL-SPC-CANDIDATE-HMOD
+          name: IkCore-Native-PERF2-AUDIO-RATE-LOCK-CANDIDATE-HMOD
           path: |
-            IkCore-Native-PERF2-AUDIO-AUDIT.hmod
-            IkCore-Native-PERF2-AUDIO-AUDIT.hmod.sha256
-            IkCore-Native-PERF2-diagnostics.tar.gz
+            IkCore-Native-PERF2-AUDIO-RATE-LOCK.hmod
+            IkCore-Native-PERF2-AUDIO-RATE-LOCK.hmod.sha256
+            IkCore-Native-PERF2-AUDIO-RATE-LOCK-diagnostics.tar.gz
           retention-days: 30
           if-no-files-found: error
