@@ -2069,3 +2069,242 @@ mc = replace_once(mc, write_anchor, write_new, "gb_memory fixed MBC write path")
 
 GBMC.write_text(mc, encoding="utf-8")
 print("IK Core A7 OPT 2/5 CPU/memory hot paths applied.")
+
+
+# ---- A7 OPT 3/5: fast DMG timing skeleton
+# Mode 3 intentionally runs two pixel machines: tm is a timing skeleton and
+# om is the real pixel-output machine. On SGB1/DMG, tm does not need tile or
+# sprite pixel *values* to determine timing; only FIFO occupancy, fetch phase,
+# window/object state and bus-visible OAM latches affect its schedule.
+# Keep om bit-for-bit on the original path. For tm, preserve every dot and
+# state transition but skip pixel-value VRAM reads / FIFO array traffic.
+
+GBPPU = ROOT / "supersnes9x" / "sgb" / "gb_ppu.cpp"
+gp = GBPPU.read_text(encoding="utf-8-sig")
+
+push_anchor = """\tconst bool flip = IKCORE_PPU_CGB(p) && (m.fetch_attr & 0x20);
+\tfor (int i = 0; i < 8; ++i)
+"""
+push_new = """#ifdef IKCORE_SGB_TIMING_SKELETON_FAST
+\tif (!m.emits)
+\t{
+\t\t// Timing skeleton: a successful BG push always contributes 8 FIFO
+\t\t// slots. Pixel values/attributes are consumed only by the output
+\t\t// machine and cannot affect DMG fetch timing.
+\t\tm.bgf_count = 8;
+\t\tm.fetch_stage = 0;
+\t\tm.fetch_dot   = 0;
+\t\treturn;
+\t}
+#endif
+\tconst bool flip = IKCORE_PPU_CGB(p) && (m.fetch_attr & 0x20);
+\tfor (int i = 0; i < 8; ++i)
+"""
+gp = replace_once(gp, push_anchor, push_new, "gb_ppu skeleton BG FIFO value bypass")
+
+fetch_anchor = """void FetcherDot(Ppu &p, PixelMachine &m)
+{
+\tif (m.fetch_pause > 0)
+\t{
+\t\t--m.fetch_pause;
+\t\treturn;
+\t}
+\tswitch (m.fetch_stage)
+"""
+fetch_new = """void FetcherDot(Ppu &p, PixelMachine &m)
+{
+\tif (m.fetch_pause > 0)
+\t{
+\t\t--m.fetch_pause;
+\t\treturn;
+\t}
+#ifdef IKCORE_SGB_TIMING_SKELETON_FAST
+\tif (!m.emits)
+\t{
+\t\t// DMG timing-only fetcher. The six T1/T2 dots and push retry are
+\t\t// identical to the full fetcher, but tile/data bytes are irrelevant
+\t\t// to tm: only phase, FIFO occupancy and window tile count drive time.
+\t\tswitch (m.fetch_stage)
+\t\t{
+\t\tcase 0:
+\t\t\tif (m.fetch_dot == 0) { m.fetch_dot = 1; return; }
+\t\t\tm.fetch_dot = 0; m.fetch_stage = 1; return;
+\t\tcase 1:
+\t\t\tif (m.fetch_dot == 0) { m.fetch_dot = 1; return; }
+\t\t\tm.fetch_dot = 0; m.fetch_stage = 2; return;
+\t\tcase 2:
+\t\t\tif (m.fetch_dot == 0) { m.fetch_dot = 1; return; }
+\t\t\tm.fetch_dot = 0;
+\t\t\tif (m.fetch_is_window)
+\t\t\t\tm.fetch_tile_x = static_cast<uint8_t>((m.fetch_tile_x + 1) & 31);
+\t\t\tm.fetch_stage = 3;
+\t\t\tBgPushAttempt(p, m);
+\t\t\treturn;
+\t\tdefault:
+\t\t\tBgPushAttempt(p, m);
+\t\t\treturn;
+\t\t}
+\t}
+#endif
+\tswitch (m.fetch_stage)
+"""
+gp = replace_once(gp, fetch_anchor, fetch_new, "gb_ppu timing-only fetcher")
+
+overlay_anchor = """void ObjOverlayRow(Ppu &p, PixelMachine &m, uint8_t lo, uint8_t hi, uint8_t flags, uint8_t oi)
+{
+\tm.objf_uflow = 0;
+\twhile (m.objf_size < 8)
+"""
+overlay_new = """void ObjOverlayRow(Ppu &p, PixelMachine &m, uint8_t lo, uint8_t hi, uint8_t flags, uint8_t oi)
+{
+\tm.objf_uflow = 0;
+#ifdef IKCORE_SGB_TIMING_SKELETON_FAST
+\tif (!m.emits)
+\t{
+\t\t// tm only needs FIFO occupancy for pop/rewind bookkeeping. Sprite
+\t\t// color, palette and owner data never feed the DMG timing machine.
+\t\tm.objf_size = 8;
+\t\treturn;
+\t}
+#endif
+\twhile (m.objf_size < 8)
+"""
+gp = replace_once(gp, overlay_anchor, overlay_new, "gb_ppu skeleton OBJ FIFO value bypass")
+
+obj3_anchor = """\tcase 3:
+\t\tm.obj_lo = p.vram[ObjLineAddr(p, m, h.y)];
+\t\tm.obj_fetch_state = 2;
+\t\treturn;
+\tcase 2: m.obj_fetch_state = 1; return;
+\tdefault:
+\t\tm.obj_hi = p.vram[static_cast<uint16_t>(ObjLineAddr(p, m, h.y) + 1)];
+\t\tm.during_obj = false;
+\t\tm.obj_fetch_state = 0;
+\t\tm.obj_overlay = true;
+\t\treturn;
+"""
+obj3_new = """\tcase 3:
+#ifdef IKCORE_SGB_TIMING_SKELETON_FAST
+\t\tif (m.emits)
+#endif
+\t\t\tm.obj_lo = p.vram[ObjLineAddr(p, m, h.y)];
+\t\tm.obj_fetch_state = 2;
+\t\treturn;
+\tcase 2: m.obj_fetch_state = 1; return;
+\tdefault:
+#ifdef IKCORE_SGB_TIMING_SKELETON_FAST
+\t\tif (m.emits)
+#endif
+\t\t\tm.obj_hi = p.vram[static_cast<uint16_t>(ObjLineAddr(p, m, h.y) + 1)];
+\t\tm.during_obj = false;
+\t\tm.obj_fetch_state = 0;
+\t\tm.obj_overlay = true;
+\t\treturn;
+"""
+gp = replace_once(gp, obj3_anchor, obj3_new, "gb_ppu skeleton OBJ VRAM bypass")
+
+render_anchor = """\tuint8_t c, at;
+\tbool win;
+\tif (m.bgf_insert)
+\t{
+\t\tm.bgf_insert = false;
+\t\tc = 0; at = 0; win = m.fetch_is_window;
+\t}
+\telse
+\t{
+\t\tc   = m.bgf_color[m.bgf_head];
+\t\tat  = m.bgf_attr[m.bgf_head];
+\t\twin = m.bgf_layer[m.bgf_head] != 0;
+\t\tm.bgf_head = static_cast<uint8_t>((m.bgf_head + 1) & 7);
+\t\t--m.bgf_count;
+\t}
+\t// The OBJ FIFO pops in step with every BG pop — dropped pixels consume
+\t// sprite pixels too (left-edge clipping falls out of this).
+\tuint8_t obj_c = 0, obj_fl = 0;
+\tif (m.objf_size > 0)
+\t{
+\t\tobj_c  = m.objf_color[m.objf_head];
+\t\tobj_fl = m.objf_flags[m.objf_head];
+\t\tm.objf_head = static_cast<uint8_t>((m.objf_head + 1) & 7);
+\t\t--m.objf_size;
+\t}
+\telse
+\t{
+\t\t++m.objf_uflow;
+\t}
+"""
+render_new = """\tuint8_t c = 0, at = 0;
+\tbool win = m.fetch_is_window;
+\tif (m.bgf_insert)
+\t{
+\t\tm.bgf_insert = false;
+\t}
+\telse
+\t{
+#ifdef IKCORE_SGB_TIMING_SKELETON_FAST
+\t\tif (m.emits)
+\t\t{
+#endif
+\t\t\tc   = m.bgf_color[m.bgf_head];
+\t\t\tat  = m.bgf_attr[m.bgf_head];
+\t\t\twin = m.bgf_layer[m.bgf_head] != 0;
+#ifdef IKCORE_SGB_TIMING_SKELETON_FAST
+\t\t}
+#endif
+\t\tm.bgf_head = static_cast<uint8_t>((m.bgf_head + 1) & 7);
+\t\t--m.bgf_count;
+\t}
+\t// The OBJ FIFO pops in step with every BG pop — dropped pixels consume
+\t// sprite pixels too (left-edge clipping falls out of this).
+\tuint8_t obj_c = 0, obj_fl = 0;
+\tif (m.objf_size > 0)
+\t{
+#ifdef IKCORE_SGB_TIMING_SKELETON_FAST
+\t\tif (m.emits)
+\t\t{
+#endif
+\t\t\tobj_c  = m.objf_color[m.objf_head];
+\t\t\tobj_fl = m.objf_flags[m.objf_head];
+#ifdef IKCORE_SGB_TIMING_SKELETON_FAST
+\t\t}
+#endif
+\t\tm.objf_head = static_cast<uint8_t>((m.objf_head + 1) & 7);
+\t\t--m.objf_size;
+\t}
+\telse
+\t{
+\t\t++m.objf_uflow;
+\t}
+"""
+gp = replace_once(gp, render_anchor, render_new, "gb_ppu skeleton RenderDot data bypass")
+
+emit_anchor = """\tEmitPixel(p, m, c, at, win, obj_c, obj_fl);
+\t++m.pos;
+"""
+emit_new = """#ifdef IKCORE_SGB_TIMING_SKELETON_FAST
+\tif (m.emits)
+#endif
+\t\tEmitPixel(p, m, c, at, win, obj_c, obj_fl);
+\t++m.pos;
+"""
+gp = replace_once(gp, emit_anchor, emit_new, "gb_ppu skeleton EmitPixel bypass")
+
+# Dedicated SGBPACK never enables the host "no sprite limit" hack. Fixing the
+# hardware limit removes one branch at every mode-2->3 transition and makes
+# the s>=10 instant-fetch path unreachable in this build.
+limit_anchor = """\tconst int limit = p.no_sprite_limit
+\t\t? static_cast<int>(sizeof p.sprites / sizeof p.sprites[0])
+\t\t: GB_OAM_SCAN_LIMIT;
+"""
+limit_new = """#ifdef IKCORE_SGB_TIMING_SKELETON_FAST
+\tconst int limit = GB_OAM_SCAN_LIMIT;
+#else
+\tconst int limit = p.no_sprite_limit
+\t\t? static_cast<int>(sizeof p.sprites / sizeof p.sprites[0])
+\t\t: GB_OAM_SCAN_LIMIT;
+#endif
+"""
+gp = replace_once(gp, limit_anchor, limit_new, "gb_ppu fixed hardware sprite limit")
+
+GBPPU.write_text(gp, encoding="utf-8")
+print("IK Core A7 OPT 3/5 fast DMG timing skeleton applied.")
