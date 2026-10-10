@@ -1,4 +1,4 @@
-name: Build NES Mini Native N2.5 SGB Engine HMOD
+name: Build NES Mini Native N2.6 SGB Engine HMOD
 
 on:
   workflow_dispatch:
@@ -93,7 +93,7 @@ jobs:
           git diff --check
           grep -q "Ik Core loaded SGBPACK1" memmap.cpp
 
-      - name: Build lazy-APU direct SGBPACK core for ARMv7
+      - name: Build exact-fastpath direct SGBPACK core for ARMv7
         working-directory: supersnes9x/libretro
         run: |
           set -e
@@ -105,11 +105,11 @@ jobs:
             AR="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar" \
             STRIP="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-strip" \
             HAVE_UNZIP=0 \
-            CPPFLAGS="-DSGBPACK_LITE -DIKCORE_SGB_LAZY_APU" \
+            CPPFLAGS="-DSGBPACK_LITE -DIKCORE_SGB_LAZY_APU -DIKCORE_GB_FAST_IDLE" \
             LDFLAGS="-flto=4 -static-libgcc -static-libstdc++" \
             LIBS="$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6"
 
-      - name: Verify and stage lazy-APU direct SGB core
+      - name: Verify and stage exact-fastpath direct SGB core
         working-directory: supersnes9x/libretro
         run: |
           set -e
@@ -139,12 +139,12 @@ jobs:
             exit 1
           fi
 
-          echo "CORE MODE: SGBPACK_LITE direct GB/SGB engine + IKCORE_SGB_LAZY_APU, full 256x224 composite" >> "$GITHUB_WORKSPACE/dist/CORE-VERIFY.txt"
+          echo "CORE MODE: SGBPACK_LITE + IKCORE_SGB_LAZY_APU + IKCORE_GB_FAST_IDLE, full 256x224 composite" >> "$GITHUB_WORKSPACE/dist/CORE-VERIFY.txt"
           cp "$CORE" "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so"
           "$STRIP" --strip-unneeded "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so"
           sha256sum "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so" > "$GITHUB_WORKSPACE/dist/SHA256-core.txt"
 
-      - name: Build N2.5 EGL frontend
+      - name: Build N2.6 EGL frontend
         run: |
           set -e
           CC="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc"
@@ -187,7 +187,7 @@ jobs:
           "$STRIP" --strip-unneeded "$GITHUB_WORKSPACE/dist/sgbpack-native-n2"
           sha256sum "$GITHUB_WORKSPACE/dist/sgbpack-native-n2" > "$GITHUB_WORKSPACE/dist/SHA256-frontend.txt"
 
-      - name: Build N2.5 HMOD
+      - name: Build N2.6 HMOD
         run: |
           set -e
           rm -rf hmod-stage
@@ -222,21 +222,21 @@ jobs:
           EOF
 
           chmod 755 hmod-stage/install hmod-stage/uninstall
-          tar -C hmod-stage -czf IkCore-Native-N2_5-SGB-EGL.hmod .
-          sha256sum IkCore-Native-N2_5-SGB-EGL.hmod > IkCore-Native-N2_5-SGB-EGL.hmod.sha256
+          tar -C hmod-stage -czf IkCore-Native-N2_6-SGB-EGL.hmod .
+          sha256sum IkCore-Native-N2_6-SGB-EGL.hmod > IkCore-Native-N2_6-SGB-EGL.hmod.sha256
 
       - name: Package diagnostics
         run: |
-          cp ikcore-project/native_n2/README.md dist/README-N2_5.txt
-          tar -C dist -czf IkCore-Native-N2_5-diagnostics.tar.gz .
+          cp ikcore-project/native_n2/README.md dist/README-N2_6.txt
+          tar -C dist -czf IkCore-Native-N2_6-diagnostics.tar.gz .
 
-      - name: Upload N2.5 HMOD
+      - name: Upload N2.6 HMOD
         uses: actions/upload-artifact@v4
         with:
-          name: IkCore-Native-N2_5-SGB-EGL-HMOD
+          name: IkCore-Native-N2_6-SGB-EGL-HMOD
           path: |
-            IkCore-Native-N2_5-SGB-EGL.hmod
-            IkCore-Native-N2_5-SGB-EGL.hmod.sha256
-            IkCore-Native-N2_5-diagnostics.tar.gz
+            IkCore-Native-N2_6-SGB-EGL.hmod
+            IkCore-Native-N2_6-SGB-EGL.hmod.sha256
+            IkCore-Native-N2_6-diagnostics.tar.gz
           retention-days: 30
           if-no-files-found: error
