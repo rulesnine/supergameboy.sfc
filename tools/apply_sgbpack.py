@@ -328,6 +328,8 @@ int CMemory::LoadSGBPackFromBytes(const uint8 *data, uint32 size, const char *pa
     Settings.GameBoyRunMode     = mode;
     Settings.GBClockMultiplier  = 1.0f;
     S9xSGBSetRunMode(mode);
+    S9xMessage(S9X_INFO, S9X_ROM_INFO,
+               "IKCORE FULL SGB BIOS path enabled.");
 #endif
 
     if (pack_path && *pack_path)
