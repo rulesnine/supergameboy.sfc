@@ -1,18 +1,18 @@
 /*
- * Ik Core Native N3.2 — scanline/ICD2 full SGB sync validation + Clover EGL frontend
+ * Ik Core Native A7.1 — fixed-profile full SGB specialization + Clover EGL frontend
  *
  * Hardware target: NES Classic / NES Mini (ARMv7 Cortex-A7, Mali-400 MP)
  *
- * N3.2 goals:
+ * A7 OPT 1/5 goals:
  * - keep the validated N1.7 Clover EGL lifecycle
  * - dlopen the Ik Core / SuperSnes9x SGBPACK libretro core directly
  * - load the SGBPACK1 test image without RetroArch
  * - render the core's real video through GLES2
  * - keep the complete SNES-side Super Game Boy BIOS path with real audio
- * - remove only the redundant opcode-tail sync; keep ICD2-boundary and scanline sync
+ * - specialize invariant SGB1/DMG hot paths at compile time
  * - map the Nintendo Clovercon NES pad to libretro joypad input
  *
- * - keep full 256x224 SGB composite output and test real gameplay\n * - allow a clean return with SELECT+START held for 1.5 seconds\n *\n * - preserve BIOS/ICD2 observable timing and clean ALSA/EGL/controller lifecycle\n *\n * Audio remains enabled so N3.2 is directly comparable with N3.0/N3.1.
+ * - keep full 256x224 SGB composite output and test real gameplay\n * - allow a clean return with SELECT+START held for 1.5 seconds\n *\n * - preserve BIOS/ICD2 timing, audio, video and controller behavior\n *\n * Audio remains enabled; compare directly against N3.2.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -36,7 +36,7 @@
 #define IKCORE_CORE_PATH "/usr/lib/ikcore/ikcore_sgbpack_libretro.so"
 #define IKCORE_STATE_DIR "/var/lib/hakchi/sgb-native-test"
 #define IKCORE_DEFAULT_PACK IKCORE_STATE_DIR "/KOF96_SGBPACK_v1_REUPLOAD.sfc"
-#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-n3_2.log"
+#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-a7_1.log"
 #define IKCORE_TEST_SECONDS 120.0
 #define IKCORE_EXIT_HOLD_SECONDS 1.5
 
@@ -1143,10 +1143,10 @@ int main(int argc, char **argv)
 
     log_open();
     pack_path = select_pack_path(argc, argv);
-    log_printf("Ik Core Native N3.2 - scanline + ICD2 SGB sync\n");
+    log_printf("Ik Core Native A7.1 - fixed-profile SGB specialization\n");
     log_printf("audio       : ACTIVADO; salida ALSA real\n");
     log_printf("core        : %s\n", IKCORE_CORE_PATH);
-    log_printf("core mode   : SGB completo + audio real + sync por scanline/ICD2\n");
+    log_printf("core mode   : SGB completo + audio real + perfil fijo SGB1/DMG\n");
     log_printf("SGBPACK     : %s\n", pack_path);
 
     if (access(pack_path, R_OK) != 0) {
@@ -1284,7 +1284,7 @@ cleanup:
 
     destroy_egl();
 
-    log_printf("\nFINAL N3.2\n");
+    log_printf("\nFINAL A7.1\n");
     log_printf("runs        : %lu\n", run_frames);
     log_printf("video frames: %lu\n", g_video_frames);
     log_printf("runtime     : %.2f s\n", test_elapsed);
@@ -1312,7 +1312,7 @@ cleanup:
     log_printf("ALSA recover: %lu\n", g_audio_recoveries);
     log_printf("ALSA close  : cerrado limpiamente\n");
     log_printf("EGL         : liberado correctamente\n");
-    log_printf("resultado   : %s\n", success ? "VIDEO SGB OK" : "FALLO; revisar ikcore-n3_2.log");
+    log_printf("resultado   : %s\n", success ? "VIDEO SGB OK" : "FALLO; revisar ikcore-a7_1.log");
     log_printf("log         : %s\n", IKCORE_LOG_PATH);
 
     if (g_log) {
@@ -1320,6 +1320,6 @@ cleanup:
         g_log = NULL;
     }
 
-    /* Always return cleanly to Clover for controlled N3.2 exits/errors. */
+    /* Always return cleanly to Clover for controlled A7.1 exits/errors. */
     return 0;
 }
