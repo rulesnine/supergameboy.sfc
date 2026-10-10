@@ -1,4 +1,4 @@
-name: Build NES Mini PERF2 PCM Rate Lock Candidate (NO DEVICE TEST)
+name: Build NES Mini Ik Core 117 SGB SFX Only (NO DEVICE TEST)
 
 on:
   workflow_dispatch:
@@ -221,32 +221,35 @@ jobs:
           copy "./usr/lib/ikcore/ikcore_sgbpack_libretro.so" "$rootfs/usr/lib/ikcore/ikcore_sgbpack_libretro.so"
           chmod +x "$rootfs/bin/sgbpack-native"
           chmod +x "$rootfs/usr/lib/ikcore/sgbpack-native-n2"
+          copy "./usr/lib/ikcore/sfx-only-build.txt" "$rootfs/usr/lib/ikcore/sfx-only-build.txt"
           EOF
 
           cat > hmod-stage/uninstall <<'EOF'
           #!/bin/sh
+          rm -f "$rootfs/usr/lib/ikcore/sfx-only-build.txt"
           rm -f "$rootfs/bin/sgbpack-native"
           rm -f "$rootfs/usr/lib/ikcore/sgbpack-native-n2"
           rm -f "$rootfs/usr/lib/ikcore/ikcore_sgbpack_libretro.so"
           rmdir "$rootfs/usr/lib/ikcore" 2>/dev/null || true
           EOF
 
+          printf "Ik Core #117 SGB SFX ONLY | GitHub run %s | commit %s\n" "${{ github.run_number }}" "${{ github.sha }}" > hmod-stage/usr/lib/ikcore/sfx-only-build.txt
           chmod 755 hmod-stage/install hmod-stage/uninstall
-          tar -C hmod-stage -czf IkCore-Native-PERF2-AUDIO-RATE-LOCK.hmod .
-          sha256sum IkCore-Native-PERF2-AUDIO-RATE-LOCK.hmod > IkCore-Native-PERF2-AUDIO-RATE-LOCK.hmod.sha256
+          tar -C hmod-stage -czf IkCore-117-SGB-SFX-ONLY-${{ github.run_number }}.hmod .
+          sha256sum IkCore-117-SGB-SFX-ONLY-${{ github.run_number }}.hmod > IkCore-117-SGB-SFX-ONLY-${{ github.run_number }}.hmod.sha256
 
       - name: Package diagnostics
         run: |
           cp ikcore-project/native_n2/README.md dist/README-PERF2.txt
-          tar -C dist -czf IkCore-Native-PERF2-AUDIO-RATE-LOCK-diagnostics.tar.gz .
+          tar -C dist -czf IkCore-117-SGB-SFX-ONLY-${{ github.run_number }}-diagnostics.tar.gz .
 
       - name: Upload PERF2 parallel SPC with rate-locked GB APU artifact (not validated)
         uses: actions/upload-artifact@v4
         with:
-          name: IkCore-Native-PERF2-AUDIO-RATE-LOCK-CANDIDATE-HMOD
+          name: IkCore-117-SGB-SFX-ONLY-${{ github.run_number }}-HMOD
           path: |
-            IkCore-Native-PERF2-AUDIO-RATE-LOCK.hmod
-            IkCore-Native-PERF2-AUDIO-RATE-LOCK.hmod.sha256
-            IkCore-Native-PERF2-AUDIO-RATE-LOCK-diagnostics.tar.gz
+            IkCore-117-SGB-SFX-ONLY-${{ github.run_number }}.hmod
+            IkCore-117-SGB-SFX-ONLY-${{ github.run_number }}.hmod.sha256
+            IkCore-117-SGB-SFX-ONLY-${{ github.run_number }}-diagnostics.tar.gz
           retention-days: 30
           if-no-files-found: error
