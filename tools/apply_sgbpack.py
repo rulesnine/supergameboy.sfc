@@ -3663,34 +3663,33 @@ void S9xSGBPerfSouTrn(const uint8 *src)
 void S9xSGBPerfAudioBeginFrame(void)
 {
     if (!ik_perf_audio_active) return;
-    // Every EndFrame waits for the previous job, so these vectors cannot
-    // be accessed by the worker while being swapped here.
+    // Sound fidelity candidate: collect SOUND/SOU_TRN during the actual GB
+    // frame, then dispatch them before the matching SPC frame. The previous
+    // implementation dispatched before GB had generated these commands and
+    // systematically postponed each effect by one SGB video frame.
+    ik_audio_frame_active = true;
+}
+
+void S9xSGBPerfAudioEndFrame(void)
+{
+    if (!ik_perf_audio_active || !ik_audio_frame_active) return;
+    // No worker is running since BeginFrame only marks the frame active.
+    // Transfer ownership while both queues are accessed from the GB thread.
     ik_audio_dispatch.clear();
     ik_audio_dispatch.swap(ik_audio_pending);
-    ik_audio_frame_active = true;
     if (ik_audio_thread_ready)
     {
         pthread_mutex_lock(&ik_audio_mutex);
         ik_audio_done = false;
         ik_audio_requested = true;
         pthread_cond_signal(&ik_audio_cv);
-        pthread_mutex_unlock(&ik_audio_mutex);
-    }
-}
-
-void S9xSGBPerfAudioEndFrame(void)
-{
-    if (!ik_perf_audio_active || !ik_audio_frame_active) return;
-    if (ik_audio_thread_ready)
-    {
-        pthread_mutex_lock(&ik_audio_mutex);
         while (!ik_audio_done)
             pthread_cond_wait(&ik_audio_cv, &ik_audio_mutex);
         pthread_mutex_unlock(&ik_audio_mutex);
     }
     else
     {
-        // Worker creation failure: exactly the previous sequential path.
+        // Same-frame serial fallback, retaining existing event ordering.
         IkApplySoundEvents();
         S9xSGBPerfAudioFrame();
     }
