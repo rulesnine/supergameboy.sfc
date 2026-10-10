@@ -3437,3 +3437,30 @@ sc = replace_once(sc,
     "SOU_TRN 6-frame transfer completion")
 SGBCPP.write_text(sc, encoding="utf-8")
 print("IKCORE VERIFIED SGBPACK FIXES: DATA_SND map and SOU_TRN timing applied.")
+
+
+# ---- IKCORE SPC NOMINAL DRIFT: bounded 0.5% resampler fill control ----------
+# Fixed SNES clocks and GB audio output rates are not exactly identical.
+# Leaving the FIFO fully open loop causes slow systematic overflow or dry
+# reads, even if CPU performance is adequate. The old BIOS PI controller
+# could compensate with ~50% pitch variation (unacceptable). Use the
+# upstream mild 0.5%-bounded servo instead, once per libretro output frame.
+LR = ROOT / "supersnes9x" / "libretro" / "libretro.cpp"
+lc = LR.read_text(encoding="utf-8-sig")
+lc = replace_once(lc,
+    """    else if (S9xSGBPerfAudioActive())
+    {
+        // Hybrid SPC runs from its own fixed NTSC clock. Preserve its
+        // natural pitch and sample ratio instead of chasing a slow host.
+    }
+""",
+    """    else if (S9xSGBPerfAudioActive())
+    {
+        // The SNES clock is nominal/fixed. Only correct small GB/SPC
+        // resampler drift (hard bound +/-0.5%), never host FPS deficit.
+        S9xSpcAdjustRate(0.005);
+    }
+""",
+    "IKCORE SPC NOMINAL DRIFT bounded servo")
+LR.write_text(lc, encoding="utf-8")
+print("IKCORE SPC NOMINAL DRIFT: 0.5% bounded SPC resampler controller.")
