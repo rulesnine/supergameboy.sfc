@@ -904,8 +904,9 @@ tick_lazy = """\tif (rt > 0)
 #endif
 }
 """
-if (!gmc.includes(tick_normal)) throw new Error("normal MemTick tail anchor missing");
-gmc=gmc.replace(tick_normal,tick_lazy);
+if tick_normal not in gmc:
+    raise RuntimeError("normal MemTick tail anchor missing")
+gmc = gmc.replace(tick_normal, tick_lazy, 1)
 
 flush_insert_anchor = """
 
@@ -928,7 +929,7 @@ uint8_t MemRead(Memory &m, uint16_t addr)
 """
 gmc = replace_once(gmc, flush_insert_anchor, flush_insert, "gb_memory.cpp lazy APU flush insertion");
 
-// Sync PCM reads.
+# Sync PCM reads.
 gmc = replace_once(gmc,
 """\t\tcase 0xFF76:
 \t\t\treturn (m.ppu && m.ppu->cgb && m.apu) ? ApuReadPcm12(*m.apu) : 0xFF;
@@ -947,7 +948,7 @@ gmc = replace_once(gmc,
 \t\t\treturn (m.ppu && m.ppu->cgb && m.apu) ? ApuReadPcm34(*m.apu) : 0xFF;
 """, "gb_memory.cpp PCM lazy sync");
 
-// Sync normal APU reads.
+# Sync normal APU reads.
 gmc = replace_once(gmc,
 """\tif (addr >= 0xFF10 && addr <= 0xFF3F)
 \t{
@@ -963,7 +964,7 @@ gmc = replace_once(gmc,
 \t}
 """, "gb_memory.cpp APU read lazy sync");
 
-// Sync normal APU writes.
+# Sync normal APU writes.
 gmc = replace_once(gmc,
 """\tif (addr >= 0xFF10 && addr <= 0xFF3F)
 \t{
@@ -1012,7 +1013,7 @@ frame_flush_new = """\twhile (!impl_->ppu.frame_ready && safety > 0 && (impl_->p
 """
 sg = replace_once(sg, frame_flush_anchor, frame_flush_new, "sgb.cpp frame-end lazy APU flush");
 
-// Emit one diagnostic marker on init; no per-cycle timers.
+# Emit one diagnostic marker on init; no per-cycle timers.
 init_anchor = """bool S9xSGBInit(void)
 {
 #ifdef IKCORE_SGB_PROFILE
