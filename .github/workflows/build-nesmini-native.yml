@@ -13,20 +13,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install ARMv7 cross compiler
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
-
-      - name: Build ARMv7 EGL frontend via dlopen
+      - name: Build ARMv7 against Ubuntu Xenial glibc 2.23
         run: |
           mkdir -p dist
-          COMMON="-O3 -pipe -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -D_FILE_OFFSET_BITS=64"
-          arm-linux-gnueabihf-gcc $COMMON native/sgbpack_native_n1.c -o dist/sgbpack-native -ldl
-          arm-linux-gnueabihf-strip dist/sgbpack-native
-          file dist/sgbpack-native
-          arm-linux-gnueabihf-readelf -d dist/sgbpack-native | tee dist/DYNAMIC.txt
-          arm-linux-gnueabihf-readelf --version-info dist/sgbpack-native | tee dist/VERSIONS.txt
+
+          docker run --rm             -v "$PWD:/work"             -w /work             ubuntu:16.04             bash -lc '
+              set -eux
+              sed -i "s|http://archive.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g" /etc/apt/sources.list
+              sed -i "s|http://security.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g" /etc/apt/sources.list
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends                 gcc-arm-linux-gnueabihf                 binutils-arm-linux-gnueabihf                 libc6-dev-armhf-cross                 ca-certificates                 file
+
+              COMMON="-O3 -pipe -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -D_FILE_OFFSET_BITS=64"
+              arm-linux-gnueabihf-gcc $COMMON native/sgbpack_native_n1.c -o dist/sgbpack-native -ldl
+              arm-linux-gnueabihf-strip dist/sgbpack-native
+              file dist/sgbpack-native
+              arm-linux-gnueabihf-readelf -d dist/sgbpack-native > dist/DYNAMIC.txt
+              arm-linux-gnueabihf-readelf --version-info dist/sgbpack-native > dist/VERSIONS.txt
+            '
+
+          cat dist/VERSIONS.txt
+
+          python3 - <<'PY'
+          import re, pathlib, sys
+          text = pathlib.Path("dist/VERSIONS.txt").read_text(errors="ignore")
+          versions = sorted({(int(a), int(b)) for a,b in re.findall(r"GLIBC_(\d+)\.(\d+)", text)})
+          print("GLIBC requeridas:", versions)
+          bad = [v for v in versions if v > (2,23)]
+          if bad:
+              print("ERROR: el binario aun requiere GLIBC > 2.23:", bad)
+              sys.exit(1)
+          print("ABI NES Mini: OK (GLIBC <= 2.23)")
+          PY
+
           sha256sum dist/sgbpack-native | tee dist/SHA256SUMS.txt
 
       - name: Build HMOD
@@ -48,19 +67,19 @@ jobs:
           EOF
 
           chmod 755 hmod-stage/install hmod-stage/uninstall
-          tar -C hmod-stage -czf IkCore-Native-N1_7-EGL.hmod .
-          sha256sum IkCore-Native-N1_7-EGL.hmod > IkCore-Native-N1_7-EGL.hmod.sha256
+          tar -C hmod-stage -czf IkCore-Native-N1_7-EGL-XENIAL.hmod .
+          sha256sum IkCore-Native-N1_7-EGL-XENIAL.hmod > IkCore-Native-N1_7-EGL-XENIAL.hmod.sha256
 
       - name: Package diagnostics
         run: |
           cp native/README.md dist/README-NATIVE.txt
-          tar -C dist -czf IkCore-NESMini-Native-N1_7-EGL.tar.gz .
+          tar -C dist -czf IkCore-NESMini-Native-N1_7-EGL-XENIAL.tar.gz .
 
       - uses: actions/upload-artifact@v4
         with:
-          name: IkCore-Native-N1_7-EGL-HMOD
+          name: IkCore-Native-N1_7-EGL-XENIAL-HMOD
           path: |
-            IkCore-Native-N1_7-EGL.hmod
-            IkCore-Native-N1_7-EGL.hmod.sha256
-            IkCore-NESMini-Native-N1_7-EGL.tar.gz
+            IkCore-Native-N1_7-EGL-XENIAL.hmod
+            IkCore-Native-N1_7-EGL-XENIAL.hmod.sha256
+            IkCore-NESMini-Native-N1_7-EGL-XENIAL.tar.gz
           if-no-files-found: error
