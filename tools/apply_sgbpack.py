@@ -1847,7 +1847,12 @@ pc = replace_once(pc, ns, pred, "gb_ppu fixed profile predicate")
 cgb_reads = pc.count("p.cgb")
 if cgb_reads < 30:
     raise SystemExit(f"gb_ppu.cpp: expected many p.cgb hot-path reads, found {cgb_reads}")
+# Do not touch members whose names merely begin with cgb (e.g.
+# p.cgb_pal_written). Protect that one state field before replacing the
+# standalone mode predicate.
+pc = pc.replace("p.cgb_pal_written", "__IKCORE_CGB_PAL_WRITTEN__")
 pc = pc.replace("p.cgb", "IKCORE_PPU_CGB(p)")
+pc = pc.replace("__IKCORE_CGB_PAL_WRITTEN__", "p.cgb_pal_written")
 PPUCPP.write_text(pc, encoding="utf-8")
 
 # SGB clock bridge: SGBPACK's authentic target is SGB1, whose hardware ratio
