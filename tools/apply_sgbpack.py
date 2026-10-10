@@ -1039,3 +1039,78 @@ sg = replace_once(sg, init_anchor, init_new, "sgb.cpp lazy APU marker");
 SGB.write_text(sg, encoding="utf-8")
 
 print("IK Core N2.5 lazy-APU optimization integration applied.")
+
+
+# ---- N2.6 exact event-free fast paths
+# These are not hardware cuts. They skip work only when the skipped path has
+# no state transition to perform during this machine cycle.
+
+GBMC = ROOT / "supersnes9x" / "sgb" / "gb_memory.cpp"
+gmc = GBMC.read_text(encoding="utf-8-sig")
+
+dma_old = """\tif (!stopped && tick_dma)
+\t\tfor (int32_t t = 0; t < tcycles; t += 4)
+\t\t\tDmaTickM(m);
+"""
+dma_new = """\t// OAM DMA is idle for almost the entire game. Calling DmaTickM once per
+\t// machine cycle while neither setup nor transfer is active is a pure no-op.
+\tif (!stopped && tick_dma && (m.dma_active || m.dma_setup > 0))
+\t\tfor (int32_t t = 0; t < tcycles; t += 4)
+\t\t\tDmaTickM(m);
+"""
+dma_count = gmc.count(dma_old)
+if dma_count < 1:
+    raise RuntimeError("gb_memory.cpp DMA idle anchor missing")
+gmc = gmc.replace(dma_old, dma_new)
+GBMC.write_text(gmc, encoding="utf-8")
+
+GBT = ROOT / "supersnes9x" / "sgb" / "gb_timer.cpp"
+gt = GBT.read_text(encoding="utf-8-sig")
+
+timer_anchor = """void TimerStep(Timer &t, Memory &mem, int32_t tcycles)
+{
+\tfor (int32_t i = 0; i < tcycles; ++i)
+"""
+timer_new = """void TimerStep(Timer &t, Memory &mem, int32_t tcycles)
+{
+#ifdef IKCORE_GB_FAST_IDLE
+\t// Cpu::Step normally advances one 4-T-cycle machine cycle at a time.
+\t// If this interval contains no TIMA falling edge, serial activity,
+\t// delayed reload, or DIV-APU edge, TimerStep has exactly one observable
+\t// effect: advancing DIV. Do that in O(1) instead of four per-dot loops.
+\tif (tcycles > 0 && tcycles <= 4 &&
+\t    !t.tima_overflow_pending && t.reload_delay == 0 &&
+\t    t.reload_just == 0 && mem.serial_guard == 0 && mem.serial_bits == 0)
+\t{
+\t\tconst uint16_t old_div = t.div_counter;
+\t\tconst uint16_t new_div =
+\t\t\tstatic_cast<uint16_t>(old_div + static_cast<uint16_t>(tcycles));
+
+\t\tbool timer_fall = false;
+\t\tif (t.tac & 0x04)
+\t\t{
+\t\t\tconst uint8_t bit = TIMA_BIT[t.tac & 0x03];
+\t\t\ttimer_fall = DivBit(old_div, bit) && !DivBit(new_div, bit);
+\t\t}
+
+\t\tbool apu_edge = false;
+\t\tif (mem.apu)
+\t\t{
+\t\t\tconst uint8_t abit = mem.double_speed ? 13 : 12;
+\t\t\tapu_edge = DivBit(old_div, abit) != DivBit(new_div, abit);
+\t\t}
+
+\t\tif (!timer_fall && !apu_edge)
+\t\t{
+\t\t\tt.div_counter = new_div;
+\t\t\treturn;
+\t\t}
+\t}
+#endif
+
+\tfor (int32_t i = 0; i < tcycles; ++i)
+"""
+gt = replace_once(gt, timer_anchor, timer_new, "gb_timer.cpp event-free fast path")
+GBT.write_text(gt, encoding="utf-8")
+
+print("IK Core N2.6 exact idle fast paths applied.")
