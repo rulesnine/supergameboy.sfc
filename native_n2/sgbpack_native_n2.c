@@ -1,18 +1,18 @@
 /*
- * Ik Core Native N2.1 — optimized direct SGB engine + Clover EGL frontend
+ * Ik Core Native N2.2 — paced gameplay test + optimized SGB engine + Clover EGL frontend
  *
  * Hardware target: NES Classic / NES Mini (ARMv7 Cortex-A7, Mali-400 MP)
  *
- * N2.1 goals:
+ * N2.2 goals:
  * - keep the validated N1.7 Clover EGL lifecycle
  * - dlopen the Ik Core / SuperSnes9x SGBPACK libretro core directly
  * - load the SGBPACK1 test image without RetroArch
  * - render the core's real video through GLES2
  * - keep ALSA closed (audio disabled at the libretro environment layer)
- * - benchmark the full SGB path for 10 seconds, then return cleanly to Clover
+ * - run a paced 60 Hz gameplay test long enough to reach actual gameplay
  * - map the Nintendo Clovercon NES pad to libretro joypad input
  *
- * This is a diagnostic integration stage, not the final player frontend.
+ * - allow a clean return with SELECT+START held for 1.5 seconds\n *\n * Audio remains disabled in N2.2 so ALSA/Clover audio is still isolated.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -36,8 +36,9 @@
 #define IKCORE_CORE_PATH "/usr/lib/ikcore/ikcore_sgbpack_libretro.so"
 #define IKCORE_STATE_DIR "/var/lib/hakchi/sgb-native-test"
 #define IKCORE_DEFAULT_PACK IKCORE_STATE_DIR "/KOF96_SGBPACK_v1_REUPLOAD.sfc"
-#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-n2_1.log"
-#define IKCORE_BENCH_SECONDS 10.0
+#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-n2_2.log"
+#define IKCORE_TEST_SECONDS 120.0
+#define IKCORE_EXIT_HOLD_SECONDS 1.5
 
 /* Minimal EGL declarations, loaded dynamically just like N1.7. */
 typedef void *EGLDisplay;
@@ -219,6 +220,8 @@ static GLint g_attr_uv = -1;
 static GLint g_uniform_tex = -1;
 static uint8_t *g_rgba = NULL;
 static size_t g_rgba_cap = 0;
+static uint8_t *g_rgb565_pack = NULL;
+static size_t g_rgb565_pack_cap = 0;
 static enum retro_pixel_format g_pixel_format = RETRO_PIXEL_FORMAT_0RGB1555;
 static unsigned g_frame_w = 0;
 static unsigned g_frame_h = 0;
@@ -229,8 +232,12 @@ static float g_core_aspect = 4.0f / 3.0f;
 static unsigned long g_video_frames = 0;
 static unsigned long g_audio_frames_discarded = 0;
 static unsigned long g_input_events = 0;
+static unsigned long g_late_frames = 0;
 static double g_video_seconds = 0.0;
+static double g_work_seconds = 0.0;
+static size_t g_first_pitch = 0;
 static int g_swap_failed = 0;
+static int g_user_exit = 0;
 static int g_shutdown_requested = 0;
 static int g_padfd = -1;
 static uint16_t g_pad_mask = 0;
@@ -257,6 +264,20 @@ static double now_s(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
+}
+
+static void sleep_s(double seconds)
+{
+    struct timespec req, rem;
+    if (seconds <= 0.0) return;
+
+    req.tv_sec = (time_t)seconds;
+    req.tv_nsec = (long)((seconds - (double)req.tv_sec) * 1000000000.0);
+    if (req.tv_nsec < 0) req.tv_nsec = 0;
+    if (req.tv_nsec > 999999999L) req.tv_nsec = 999999999L;
+
+    while (nanosleep(&req, &rem) < 0 && errno == EINTR)
+        req = rem;
 }
 
 static void log_open(void)
@@ -535,6 +556,9 @@ static void destroy_egl(void)
     free(g_rgba);
     g_rgba = NULL;
     g_rgba_cap = 0;
+    free(g_rgb565_pack);
+    g_rgb565_pack = NULL;
+    g_rgb565_pack_cap = 0;
 
     if (g_display != EGL_NO_DISPLAY && eglMakeCurrent)
         eglMakeCurrent(g_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -803,6 +827,31 @@ static void draw_texture_frame(unsigned w, unsigned h)
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
+static const void *pack_rgb565_rows(const void *data, unsigned w, unsigned h, size_t pitch)
+{
+    size_t tight_pitch = (size_t)w * 2u;
+    size_t need = tight_pitch * (size_t)h;
+    unsigned y;
+
+    if (pitch == tight_pitch)
+        return data;
+
+    if (need > g_rgb565_pack_cap) {
+        uint8_t *p = (uint8_t *)realloc(g_rgb565_pack, need);
+        if (!p) return NULL;
+        g_rgb565_pack = p;
+        g_rgb565_pack_cap = need;
+    }
+
+    for (y = 0; y < h; y++) {
+        memcpy(g_rgb565_pack + (size_t)y * tight_pitch,
+               (const uint8_t *)data + (size_t)y * pitch,
+               tight_pitch);
+    }
+
+    return g_rgb565_pack;
+}
+
 static void upload_rgb565_direct(const void *data, unsigned w, unsigned h)
 {
     glBindTexture(GL_TEXTURE_2D, g_texture);
@@ -849,14 +898,21 @@ static void video_cb(const void *data, unsigned width, unsigned height, size_t p
 
     g_frame_w = width;
     g_frame_h = height;
+    if (!g_first_pitch) g_first_pitch = pitch;
 
     /*
-     * N2.1 fast path: SuperSnes9x requests RGB565 (pixel fmt=2) and normally
-     * emits a tightly packed 256x224 surface. Feed those 16-bit pixels straight
-     * to Mali instead of expanding every pixel to RGBA on the Cortex-A7.
+     * N2.2 RGB565 path:
+     * SuperSnes9x already renders in the exact 16-bit format Mali accepts.
+     * If the core pitch is wider than the visible 256 pixels, only compact the
+     * rows with memcpy; never expand every pixel to 32-bit RGBA on Cortex-A7.
      */
-    if (g_pixel_format == RETRO_PIXEL_FORMAT_RGB565 && pitch == (size_t)width * 2u) {
-        upload_rgb565_direct(data, width, height);
+    if (g_pixel_format == RETRO_PIXEL_FORMAT_RGB565) {
+        const void *packed = pack_rgb565_rows(data, width, height, pitch);
+        if (!packed) {
+            g_video_seconds += now_s() - t0;
+            return;
+        }
+        upload_rgb565_direct(packed, width, height);
     } else {
         convert_frame_rgba(data, width, height, pitch);
         if (!g_rgba) {
@@ -954,15 +1010,17 @@ int main(int argc, char **argv)
     struct retro_system_info sysinfo;
     struct retro_system_av_info avinfo;
     struct retro_game_info game;
-    double start = 0.0, last = 0.0, end = 0.0, bench_elapsed = 0.0;
-    unsigned long run_frames = 0;
+    double start = 0.0, last = 0.0, end = 0.0, test_elapsed = 0.0;
+    double target_fps = 60.0988, frame_period = 1.0 / 60.0988;
+    double deadline = 0.0, exit_combo_since = 0.0;
+    unsigned long run_frames = 0, last_run_frames = 0;
     int core_inited = 0;
     int game_loaded = 0;
     int success = 0;
 
     log_open();
     pack_path = select_pack_path(argc, argv);
-    log_printf("Ik Core Native N2.1 - optimized SGB engine / EGL benchmark\n");
+    log_printf("Ik Core Native N2.2 - paced SGB gameplay test\n");
     log_printf("audio       : DESACTIVADO; ALSA no se abre\n");
     log_printf("core        : %s\n", IKCORE_CORE_PATH);
     log_printf("SGBPACK     : %s\n", pack_path);
@@ -1016,24 +1074,67 @@ int main(int argc, char **argv)
                (double)g_core_aspect);
     log_printf("timing      : %.3f fps / %.0f Hz audio (audio descartado)\n",
                avinfo.timing.fps, avinfo.timing.sample_rate);
-    log_printf("video path  : RGB565 directo a Mali + textura persistente\\n");
-    log_printf("benchmark   : %.0f s SIN limitador, motor SGB completo\\n", IKCORE_BENCH_SECONDS);
+
+    if (avinfo.timing.fps > 30.0 && avinfo.timing.fps < 120.0)
+        target_fps = avinfo.timing.fps;
+    frame_period = 1.0 / target_fps;
+
+    log_printf("video path  : RGB565 16-bit a Mali; compacta filas solo si pitch > visible\n");
+    log_printf("play test   : %.0f s a %.3f FPS objetivo\n", IKCORE_TEST_SECONDS, target_fps);
+    log_printf("salir       : mantener SELECT+START %.1f s\n", IKCORE_EXIT_HOLD_SECONDS);
 
     start = last = now_s();
-    end = start + IKCORE_BENCH_SECONDS;
+    deadline = start;
+    end = start + IKCORE_TEST_SECONDS;
+
     while (!g_shutdown_requested && !g_swap_failed && now_s() < end) {
-        double n;
+        double work_start, work_end, n;
+        uint16_t exit_mask = (uint16_t)((1u << RETRO_DEVICE_ID_JOYPAD_SELECT) |
+                                        (1u << RETRO_DEVICE_ID_JOYPAD_START));
+
+        work_start = now_s();
         core_retro_run();
+        work_end = now_s();
+        g_work_seconds += work_end - work_start;
         run_frames++;
+
+        n = work_end;
+        if ((g_pad_mask & exit_mask) == exit_mask) {
+            if (exit_combo_since <= 0.0)
+                exit_combo_since = n;
+            else if (n - exit_combo_since >= IKCORE_EXIT_HOLD_SECONDS) {
+                g_user_exit = 1;
+                break;
+            }
+        } else {
+            exit_combo_since = 0.0;
+        }
+
+        deadline += frame_period;
+        n = now_s();
+        if (n < deadline) {
+            sleep_s(deadline - n);
+        } else {
+            g_late_frames++;
+            if (n - deadline > frame_period * 3.0)
+                deadline = n;
+        }
+
         n = now_s();
         if (n - last >= 1.0) {
-            log_printf("engine FPS  : %.2f (runs=%lu video=%lu)\n",
-                       (double)run_frames / (n - start), run_frames, g_video_frames);
+            unsigned long delta_frames = run_frames - last_run_frames;
+            double interval = n - last;
+            double capacity = g_work_seconds > 0.0 ?
+                              (double)run_frames / g_work_seconds : 0.0;
+            log_printf("play FPS    : %.2f | capacidad trabajo: %.2f FPS | runs=%lu video=%lu\n",
+                       interval > 0.0 ? (double)delta_frames / interval : 0.0,
+                       capacity, run_frames, g_video_frames);
             last = n;
+            last_run_frames = run_frames;
         }
     }
 
-    bench_elapsed = now_s() - start;
+    test_elapsed = now_s() - start;
     success = (run_frames > 0 && g_video_frames > 0 && !g_swap_failed);
 
 cleanup:
@@ -1049,19 +1150,31 @@ cleanup:
 
     destroy_egl();
 
-    log_printf("\nFINAL N2.1\n");
+    log_printf("\nFINAL N2.2\n");
     log_printf("runs        : %lu\n", run_frames);
     log_printf("video frames: %lu\n", g_video_frames);
-    if (start > 0.0) {
-        double elapsed = now_s() - start;
-        if (elapsed > 0.0)
-            log_printf("engine avg  : %.2f FPS\n", (double)run_frames / elapsed);
+    log_printf("runtime     : %.2f s\n", test_elapsed);
+    if (test_elapsed > 0.0)
+        log_printf("play avg    : %.2f FPS\n", (double)run_frames / test_elapsed);
+    if (g_work_seconds > 0.0) {
+        log_printf("work cap    : %.2f FPS\n", (double)run_frames / g_work_seconds);
+        log_printf("work cost   : %.3f ms/frame\n",
+                   (g_work_seconds * 1000.0) / (double)run_frames);
     }
+    if (g_video_frames > 0)
+        log_printf("video cost  : %.3f ms/frame\n",
+                   (g_video_seconds * 1000.0) / (double)g_video_frames);
+    log_printf("late frames : %lu\n", g_late_frames);
+    log_printf("first pitch : %lu bytes\n", (unsigned long)g_first_pitch);
+    log_printf("exit reason : %s\n",
+               g_user_exit ? "SELECT+START" :
+               (g_shutdown_requested ? "core shutdown" :
+               (g_swap_failed ? "EGL swap failure" : "timeout 120 s")));
     log_printf("last frame  : %ux%u\n", g_frame_w, g_frame_h);
     log_printf("input events: %lu\n", g_input_events);
     log_printf("audio frames: %lu descartados / ALSA nunca abierto\n", g_audio_frames_discarded);
     log_printf("EGL         : liberado correctamente\n");
-    log_printf("resultado   : %s\n", success ? "VIDEO SGB OK" : "FALLO; revisar ikcore-n2_1.log");
+    log_printf("resultado   : %s\n", success ? "VIDEO SGB OK" : "FALLO; revisar ikcore-n2_2.log");
     log_printf("log         : %s\n", IKCORE_LOG_PATH);
 
     if (g_log) {
@@ -1069,6 +1182,6 @@ cleanup:
         g_log = NULL;
     }
 
-    /* Always return cleanly to Clover for controlled N2 errors. */
+    /* Always return cleanly to Clover for controlled N2.2 exits/errors. */
     return 0;
 }
