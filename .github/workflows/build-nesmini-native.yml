@@ -163,7 +163,7 @@ jobs:
             -march=armv7-a -mtune=cortex-a7 \
             -mfpu=neon-vfpv4 -mfloat-abi=hard \
             -D_FILE_OFFSET_BITS=64 \
-            -DIKCORE_BUILD_NUMBER=\\"${{ github.run_number }}\\" -DIKCORE_BUILD_SHA=\\"${{ github.sha }}\\" \
+            '-DIKCORE_BUILD_NUMBER="${{ github.run_number }}"' '-DIKCORE_BUILD_SHA="${{ github.sha }}"' \
             -I"$GITHUB_WORKSPACE/supersnes9x/libretro" \
             "$GITHUB_WORKSPACE/ikcore-project/native_n2/sgbpack_native_n2.c" \
             -o "$GITHUB_WORKSPACE/dist/sgbpack-native-n2" \
