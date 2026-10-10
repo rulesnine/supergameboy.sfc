@@ -1,4 +1,4 @@
-name: Build NES Mini Native PERF1 SGB Engine HMOD
+name: Build NES Mini Native PERF2 SGB Engine HMOD
 
 on:
   workflow_dispatch:
@@ -93,7 +93,7 @@ jobs:
           git diff --check
           grep -q "Ik Core loaded SGBPACK1" memmap.cpp
 
-      - name: Build PERF1 direct event-driven SGB core for ARMv7
+      - name: Build PERF2 hybrid-audio direct SGB core for ARMv7
         working-directory: supersnes9x/libretro
         run: |
           set -e
@@ -105,11 +105,11 @@ jobs:
             AR="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar" \
             STRIP="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-strip" \
             HAVE_UNZIP=0 \
-            CPPFLAGS="-DSGBPACK_LITE -DIKCORE_SGB_LAZY_APU -DIKCORE_GB_FAST_IDLE -DIKCORE_PPU_IDLE_FAST -DIKCORE_MBC5_FAST -DIKCORE_FIXED_ACID_KNOBS -DIKCORE_SGB_PERF_PPU" \
+            CPPFLAGS="-DSGBPACK_LITE -DIKCORE_GB_FAST_IDLE -DIKCORE_PPU_IDLE_FAST -DIKCORE_MBC5_FAST -DIKCORE_FIXED_ACID_KNOBS -DIKCORE_SGB_PERF_PPU -DIKCORE_SGB_HYBRID_AUDIO" \
             LDFLAGS="-flto=4 -static-libgcc -static-libstdc++" \
             LIBS="$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6"
 
-      - name: Verify and stage PERF1 direct SGB performance core
+      - name: Verify and stage PERF2 hybrid-audio SGB core
         working-directory: supersnes9x/libretro
         run: |
           set -e
@@ -139,12 +139,12 @@ jobs:
             exit 1
           fi
 
-          echo "CORE MODE: Ik Core direct SGB engine; event-driven DMG PPU + buffered real ALSA + border fade" >> "$GITHUB_WORKSPACE/dist/CORE-VERIFY.txt"
+          echo "CORE MODE: real SGB BIOS audio bootstrap -> direct Ik Core GB/SGB + retained SPC/DSP + atomic border" >> "$GITHUB_WORKSPACE/dist/CORE-VERIFY.txt"
           cp "$CORE" "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so"
           "$STRIP" --strip-unneeded "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so"
           sha256sum "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so" > "$GITHUB_WORKSPACE/dist/SHA256-core.txt"
 
-      - name: Build PERF1 EGL frontend
+      - name: Build PERF2 EGL frontend
         run: |
           set -e
           CC="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc"
@@ -187,7 +187,7 @@ jobs:
           "$STRIP" --strip-unneeded "$GITHUB_WORKSPACE/dist/sgbpack-native-n2"
           sha256sum "$GITHUB_WORKSPACE/dist/sgbpack-native-n2" > "$GITHUB_WORKSPACE/dist/SHA256-frontend.txt"
 
-      - name: Build PERF1 HMOD
+      - name: Build PERF2 HMOD
         run: |
           set -e
           rm -rf hmod-stage
@@ -222,21 +222,21 @@ jobs:
           EOF
 
           chmod 755 hmod-stage/install hmod-stage/uninstall
-          tar -C hmod-stage -czf IkCore-Native-PERF1-SGB-EGL.hmod .
-          sha256sum IkCore-Native-PERF1-SGB-EGL.hmod > IkCore-Native-PERF1-SGB-EGL.hmod.sha256
+          tar -C hmod-stage -czf IkCore-Native-PERF2-SGB-EGL.hmod .
+          sha256sum IkCore-Native-PERF2-SGB-EGL.hmod > IkCore-Native-PERF2-SGB-EGL.hmod.sha256
 
       - name: Package diagnostics
         run: |
-          cp ikcore-project/native_n2/README.md dist/README-PERF1.txt
-          tar -C dist -czf IkCore-Native-PERF1-diagnostics.tar.gz .
+          cp ikcore-project/native_n2/README.md dist/README-PERF2.txt
+          tar -C dist -czf IkCore-Native-PERF2-diagnostics.tar.gz .
 
-      - name: Upload PERF1 HMOD
+      - name: Upload PERF2 HMOD
         uses: actions/upload-artifact@v4
         with:
-          name: IkCore-Native-PERF1-SGB-EGL-HMOD
+          name: IkCore-Native-PERF2-SGB-EGL-HMOD
           path: |
-            IkCore-Native-PERF1-SGB-EGL.hmod
-            IkCore-Native-PERF1-SGB-EGL.hmod.sha256
-            IkCore-Native-PERF1-diagnostics.tar.gz
+            IkCore-Native-PERF2-SGB-EGL.hmod
+            IkCore-Native-PERF2-SGB-EGL.hmod.sha256
+            IkCore-Native-PERF2-diagnostics.tar.gz
           retention-days: 30
           if-no-files-found: error
