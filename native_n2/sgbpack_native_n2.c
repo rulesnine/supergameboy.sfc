@@ -1,18 +1,18 @@
 /*
- * Ik Core Native N2.3 — direct SGB-engine A/B diagnostic + Clover EGL frontend
+ * Ik Core Native N2.4 — sampled GB/SGB profiler + Clover EGL frontend
  *
  * Hardware target: NES Classic / NES Mini (ARMv7 Cortex-A7, Mali-400 MP)
  *
- * N2.3 goals:
+ * N2.4 goals:
  * - keep the validated N1.7 Clover EGL lifecycle
  * - dlopen the Ik Core / SuperSnes9x SGBPACK libretro core directly
  * - load the SGBPACK1 test image without RetroArch
  * - render the core's real video through GLES2
  * - keep ALSA closed (audio disabled at the libretro environment layer)
- * - compare the direct GB/SGB engine against N2.2 full SNES-side SGB BIOS
+ * - profile the direct GB/SGB engine to locate the real Cortex-A7 bottleneck
  * - map the Nintendo Clovercon NES pad to libretro joypad input
  *
- * - keep full 256x224 SGB composite output and test real gameplay\n * - allow a clean return with SELECT+START held for 1.5 seconds\n *\n * Audio remains disabled in N2.3 so ALSA/Clover audio is still isolated.
+ * - keep full 256x224 SGB composite output and test real gameplay\n * - allow a clean return with SELECT+START held for 1.5 seconds\n *\n * - sampled profiler separates SM83+bus, PPU, APU, timer/DMA/RTC, SGB commands and composition\n *\n * Audio remains disabled in N2.4 so ALSA/Clover audio is still isolated.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -36,7 +36,7 @@
 #define IKCORE_CORE_PATH "/usr/lib/ikcore/ikcore_sgbpack_libretro.so"
 #define IKCORE_STATE_DIR "/var/lib/hakchi/sgb-native-test"
 #define IKCORE_DEFAULT_PACK IKCORE_STATE_DIR "/KOF96_SGBPACK_v1_REUPLOAD.sfc"
-#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-n2_3.log"
+#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-n2_4.log"
 #define IKCORE_TEST_SECONDS 120.0
 #define IKCORE_EXIT_HOLD_SECONDS 1.5
 
@@ -1020,10 +1020,10 @@ int main(int argc, char **argv)
 
     log_open();
     pack_path = select_pack_path(argc, argv);
-    log_printf("Ik Core Native N2.3 - direct SGB engine A/B test\n");
+    log_printf("Ik Core Native N2.4 - sampled GB/SGB profiler\n");
     log_printf("audio       : DESACTIVADO; ALSA no se abre\n");
     log_printf("core        : %s\n", IKCORE_CORE_PATH);
-    log_printf("core mode   : SGB directo (sin emular continuamente CPU/PPU SNES)\n");
+    log_printf("core mode   : SGB directo + profiler muestreado 1/256\n");
     log_printf("SGBPACK     : %s\n", pack_path);
 
     if (access(pack_path, R_OK) != 0) {
@@ -1151,7 +1151,7 @@ cleanup:
 
     destroy_egl();
 
-    log_printf("\nFINAL N2.3\n");
+    log_printf("\nFINAL N2.4\n");
     log_printf("runs        : %lu\n", run_frames);
     log_printf("video frames: %lu\n", g_video_frames);
     log_printf("runtime     : %.2f s\n", test_elapsed);
@@ -1175,7 +1175,7 @@ cleanup:
     log_printf("input events: %lu\n", g_input_events);
     log_printf("audio frames: %lu descartados / ALSA nunca abierto\n", g_audio_frames_discarded);
     log_printf("EGL         : liberado correctamente\n");
-    log_printf("resultado   : %s\n", success ? "VIDEO SGB OK" : "FALLO; revisar ikcore-n2_3.log");
+    log_printf("resultado   : %s\n", success ? "VIDEO SGB OK" : "FALLO; revisar ikcore-n2_4.log");
     log_printf("log         : %s\n", IKCORE_LOG_PATH);
 
     if (g_log) {
@@ -1183,6 +1183,6 @@ cleanup:
         g_log = NULL;
     }
 
-    /* Always return cleanly to Clover for controlled N2.3 exits/errors. */
+    /* Always return cleanly to Clover for controlled N2.4 exits/errors. */
     return 0;
 }
