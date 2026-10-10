@@ -2427,3 +2427,608 @@ gp = replace_once(gp, transfer_old, transfer_new,
 
 GBPPU.write_text(gp, encoding="utf-8")
 print("IK Core PERF1 direct/event-driven SGB PPU applied.")
+
+
+# ---- FINAL PERF2: hybrid SGB audio + atomic border handoff
+# Bootstrap the real SGB BIOS only long enough to initialize the SNES N-SPC
+# engine, then switch the SAME GB/SGB instance to the fast direct path while
+# keeping SPC700/DSP state alive. No mGBA is used.
+#
+# During direct play:
+#   * GB APU runs exact (workflow intentionally drops IKCORE_SGB_LAZY_APU)
+#   * SPC700/DSP is advanced audio-only once per host frame
+#   * SGB SOUND writes map directly to the N-SPC CPU ports
+#   * SOU_TRN captures the 4 KiB transfer and copies packets to APU RAM
+#   * border visibility commits atomically on PCT_TRN (no visual fade)
+
+# ---- APU public helpers -----------------------------------------------------
+APUH = ROOT / "supersnes9x" / "apu" / "apu.h"
+ah = APUH.read_text(encoding="utf-8-sig")
+apu_decl_anchor = """void S9xSpcSyncToConsumption(void);
+void S9xSpcSyncReset(void);
+"""
+apu_decl_new = """void S9xSpcSyncToConsumption(void);
+void S9xSpcSyncReset(void);
+
+#ifdef IKCORE_SGB_HYBRID_AUDIO
+// Ik Core PERF2: preserve the SGB BIOS-initialized N-SPC engine after the
+// SNES CPU/PPU are retired. These functions touch only SPC700/DSP state.
+void  S9xSGBPerfAudioEnable(void);
+bool8 S9xSGBPerfAudioActive(void);
+void  S9xSGBPerfAudioFrame(void);
+void  S9xSGBPerfSoundCommand(const uint8 *data, uint32 len);
+void  S9xSGBPerfSouTrn(const uint8 *data_4k);
+#endif
+"""
+ah = replace_once(ah, apu_decl_anchor, apu_decl_new,
+                  "apu.h PERF2 helpers")
+APUH.write_text(ah, encoding="utf-8")
+
+APUCPP = ROOT / "supersnes9x" / "apu" / "apu.cpp"
+ac = APUCPP.read_text(encoding="utf-8-sig")
+
+# Hybrid state lives beside the SPC resampler internals so it can advance
+# SMP/DSP without going through stale SNES CPU cycle counters.
+apu_ns_anchor = """namespace spc {
+static apu_callback callback = NULL;
+"""
+apu_ns_new = """namespace spc {
+static apu_callback callback = NULL;
+"""
+ac = replace_once(ac, apu_ns_anchor, apu_ns_new, "apu PERF2 namespace anchor")
+
+# Insert implementation immediately before S9xAPUTimingSetSpeedup.
+apu_impl_anchor = """void S9xAPUTimingSetSpeedup(int ticks)
+{
+"""
+apu_impl = r'''#ifdef IKCORE_SGB_HYBRID_AUDIO
+namespace {
+static bool   ik_perf_audio_active = false;
+static double ik_perf_smp_frac = 0.0;
+static uint32 ik_perf_sound_commands = 0;
+static uint32 ik_perf_sou_trn_commands = 0;
+
+// Native SPC700 clock / SGB NTSC frame cadence. Keep fractional cycles so the
+// audio-only engine neither drifts nor needs the retired SNES CPU.Cycles.
+constexpr double IK_PERF_SMP_PER_FRAME =
+    1024000.0 / 60.09881389744051;
+}
+
+void S9xSGBPerfAudioEnable(void)
+{
+    ik_perf_audio_active = true;
+    ik_perf_smp_frac = 0.0;
+    // Throw away splash-era buffered PCM, NOT SPC RAM/DSP/SMP state.
+    // The N-SPC program and its sample tables remain exactly as the BIOS
+    // initialized them.
+    S9xClearSamples();
+    S9xSpcSyncReset();
+}
+
+bool8 S9xSGBPerfAudioActive(void)
+{
+    return ik_perf_audio_active ? TRUE : FALSE;
+}
+
+void S9xSGBPerfAudioFrame(void)
+{
+    if (!ik_perf_audio_active) return;
+
+    ik_perf_smp_frac += IK_PERF_SMP_PER_FRAME;
+    const int cycles = (int)ik_perf_smp_frac;
+    ik_perf_smp_frac -= (double)cycles;
+    if (cycles <= 0) return;
+
+    SNES::smp.clock -= cycles;
+    SNES::smp.enter();
+    SNES::dsp.synchronize();
+}
+
+// SGB SOUND packet bytes are defined as:
+//   [1] SFX A = SNES/APU port 1
+//   [2] SFX B = SNES/APU port 2
+//   [3] pitch/volume attributes = port 3
+//   [4] music score code = port 0
+// Port 0 is the command/score trigger, so publish parameters first and port 0
+// last to make the four-byte update atomic from the N-SPC driver's view.
+void S9xSGBPerfSoundCommand(const uint8 *data, uint32 len)
+{
+    if (!ik_perf_audio_active || !data || len < 5) return;
+    SNES::cpu.port_write(1, data[1]);
+    SNES::cpu.port_write(2, data[2]);
+    SNES::cpu.port_write(3, data[3]);
+    SNES::cpu.port_write(0, data[4]);
+    ++ik_perf_sound_commands;
+}
+
+// SOU_TRN is a 4 KiB stream of little-endian transfer packets.
+// N > 0: [size][dest][N bytes]
+// N = 0: [0000][jump address].  The real BIOS uploads through the SPC IPL;
+// here the already-running N-SPC engine receives the identical APU-RAM bytes
+// directly. This avoids re-running the SNES CPU/PPU just to copy sound data.
+void S9xSGBPerfSouTrn(const uint8 *src)
+{
+    if (!ik_perf_audio_active || !src) return;
+
+    size_t off = 0;
+    while (off + 4 <= 4096)
+    {
+        const uint16 n = (uint16)(src[off] | (src[off + 1] << 8));
+        const uint16 dst = (uint16)(src[off + 2] | (src[off + 3] << 8));
+        off += 4;
+
+        if (n == 0)
+        {
+            // Jump packet: safely restart/enter the uploaded N-SPC program.
+            SNES::smp.regs.pc = dst;
+            SNES::smp.opcode_number = 0;
+            SNES::smp.opcode_cycle = 0;
+            break;
+        }
+
+        if (off + n > 4096) break;
+        size_t copy_n = n;
+        if ((size_t)dst + copy_n > 0x10000)
+            copy_n = 0x10000 - (size_t)dst;
+        if (copy_n)
+            memcpy(SNES::smp.apuram + dst, src + off, copy_n);
+        off += n;
+    }
+    ++ik_perf_sou_trn_commands;
+}
+#endif
+
+void S9xAPUTimingSetSpeedup(int ticks)
+{
+'''
+ac = replace_once(ac, apu_impl_anchor, apu_impl,
+                  "apu.cpp PERF2 audio-only engine")
+
+# Mix SPC underneath GB in direct PERF2 just like released BIOS mode.
+mix_gate_old = """    const bool mix_spc_under_gb = Settings.SGB_BIOSModeActive &&
+                                   S9xSGBBIOSGBIsReleased();
+"""
+mix_gate_new = """    const bool mix_spc_under_gb =
+        (Settings.SGB_BIOSModeActive && S9xSGBBIOSGBIsReleased())
+#ifdef IKCORE_SGB_HYBRID_AUDIO
+        || S9xSGBPerfAudioActive()
+#endif
+        ;
+"""
+ac = replace_once(ac, mix_gate_old, mix_gate_new,
+                  "apu.cpp PERF2 mix gate")
+
+mix2_gate_old = """    const bool sgb_bios_mix = Settings.SGB_BIOSModeActive && S9xSGBBIOSGBIsReleased();
+"""
+mix2_gate_new = """    const bool sgb_bios_mix =
+        (Settings.SGB_BIOSModeActive && S9xSGBBIOSGBIsReleased())
+#ifdef IKCORE_SGB_HYBRID_AUDIO
+        || S9xSGBPerfAudioActive()
+#endif
+        ;
+"""
+ac = replace_once(ac, mix2_gate_old, mix2_gate_new,
+                  "apu.cpp PERF2 overlay gate")
+APUCPP.write_text(ac, encoding="utf-8")
+
+# ---- Libretro SPC rate controller follows hybrid audio too -----------------
+LR = ROOT / "supersnes9x" / "libretro" / "libretro.cpp"
+lc = LR.read_text(encoding="utf-8-sig")
+sync_old = """    if (Settings.SGB_BIOSModeActive && S9xSGBBIOSGBIsReleased())
+        S9xSpcSyncToConsumption();
+    else
+        S9xSpcSyncReset();
+"""
+sync_new = """    if ((Settings.SGB_BIOSModeActive && S9xSGBBIOSGBIsReleased())
+#ifdef IKCORE_SGB_HYBRID_AUDIO
+        || S9xSGBPerfAudioActive()
+#endif
+       )
+        S9xSpcSyncToConsumption();
+    else
+        S9xSpcSyncReset();
+"""
+lc = replace_once(lc, sync_old, sync_new,
+                  "libretro PERF2 SPC rate sync")
+LR.write_text(lc, encoding="utf-8")
+
+# ---- SGB state: SOU_TRN capture + atomic border ----------------------------
+SGBH = ROOT / "supersnes9x" / "sgb" / "sgb.h"
+sh = SGBH.read_text(encoding="utf-8-sig")
+sgb_method_anchor = """\tbool    IsBootSetupComplete() const;
+\tbool    IsScreenVisible() const;
+\tuint32_t GetPacketCount() const;
+"""
+sgb_method_new = """\tbool    IsBootSetupComplete() const;
+\tbool    IsScreenVisible() const;
+\tuint32_t GetPacketCount() const;
+#ifdef IKCORE_SGB_HYBRID_AUDIO
+\tvoid    EnterPerfDirectMode();
+#endif
+"""
+sh = replace_once(sh, sgb_method_anchor, sgb_method_new,
+                  "sgb.h PERF2 enter-direct method")
+
+sgb_c_anchor = """bool          S9xSGBScreenVisible (void);
+"""
+sgb_c_new = """bool          S9xSGBScreenVisible (void);
+#ifdef IKCORE_SGB_HYBRID_AUDIO
+void          S9xSGBEnterPerfDirectMode (void);
+#endif
+"""
+sh = replace_once(sh, sgb_c_anchor, sgb_c_new,
+                  "sgb.h PERF2 C facade")
+SGBH.write_text(sh, encoding="utf-8")
+
+SGBCPP = ROOT / "supersnes9x" / "sgb" / "sgb.cpp"
+sc = SGBCPP.read_text(encoding="utf-8-sig")
+
+# Need apu helper declarations in the SGB module.
+sc = replace_once(sc, '#include "sgb.h"\n',
+                  '#include "sgb.h"\n#ifdef IKCORE_SGB_HYBRID_AUDIO\n#include "../apu/apu.h"\n#endif\n',
+                  "sgb.cpp PERF2 apu include")
+
+# Extend Impl near the ordinary border-capture state.
+impl_anchor = """\tSgbcTrnHold sgbc_trn;   // see sgbc.h; armed only under SGBC
+"""
+impl_new = """#ifdef IKCORE_SGB_HYBRID_AUDIO
+\t// Direct-mode SOU_TRN uses the same 4 KiB LCD transfer mechanism as
+\t// CHR_TRN/PCT_TRN. Capture one completed GB frame after the packet.
+\tbool        perf_sou_capture = false;
+\tuint8_t     perf_sou_skip = 0;
+
+\t// Visible SGB border is committed only after PCT_TRN. CHR_TRN may update
+\t// one tile plane at a time; exposing it immediately is what produced the
+\t// half-drawn border seen in PERF1 transitions.
+\tuint16_t    perf_stable_border[SGB_BORDER_W * SGB_BORDER_H] = {};
+\tbool        perf_stable_border_valid = false;
+#endif
+
+\tSgbcTrnHold sgbc_trn;   // see sgbc.h; armed only under SGBC
+"""
+sc = replace_once(sc, impl_anchor, impl_new,
+                  "sgb.cpp PERF2 Impl state")
+
+# Reset hybrid capture/snapshot bookkeeping.
+reset_anchor = """\timpl_->border_capture.stage = Impl::BorderCapture::Idle;
+\timpl_->sgbc_trn.Reset();
+"""
+reset_new = """\timpl_->border_capture.stage = Impl::BorderCapture::Idle;
+#ifdef IKCORE_SGB_HYBRID_AUDIO
+\timpl_->perf_sou_capture = false;
+\timpl_->perf_sou_skip = 0;
+\timpl_->perf_stable_border_valid = false;
+#endif
+\timpl_->sgbc_trn.Reset();
+"""
+sc = replace_once(sc, reset_anchor, reset_new,
+                  "sgb.cpp PERF2 reset state")
+
+# SOUND + SOU_TRN command routing.
+cmd_anchor = """\tif (cmd == 0x13 || cmd == 0x14)
+\t{
+"""
+cmd_new = """#ifdef IKCORE_SGB_HYBRID_AUDIO
+\tif (cmd == 0x08 && S9xSGBPerfAudioActive())
+\t{
+\t\t// Keep diagnostic/state bookkeeping and also drive the retained N-SPC
+\t\t// engine directly.
+\t\tSgbHandleCommand(impl_->sgb_state, cmd, data, len,
+\t\t                 impl_->ppu.vram, impl_->ppu.framebuffer);
+\t\tS9xSGBPerfSoundCommand(data, len);
+\t\treturn;
+\t}
+
+\tif (cmd == 0x09 && S9xSGBPerfAudioActive())
+\t{
+\t\timpl_->perf_sou_capture = true;
+\t\timpl_->perf_sou_skip = 1;
+\t\timpl_->ppu.frame_ready = false;
+\t\treturn;
+\t}
+#endif
+
+\tif (cmd == 0x13 || cmd == 0x14)
+\t{
+"""
+sc = replace_once(sc, cmd_anchor, cmd_new,
+                  "sgb.cpp PERF2 SOUND/SOU_TRN routing")
+
+# At frame completion, capture SOU_TRN and atomically commit PCT border.
+tail_anchor = """\tif (impl_->border_capture.stage != Impl::BorderCapture::Idle &&
+\t    impl_->ppu.frame_ready)
+\t{
+"""
+tail_new = """#ifdef IKCORE_SGB_HYBRID_AUDIO
+\tif (impl_->perf_sou_capture && impl_->ppu.frame_ready)
+\t{
+\t\tif (impl_->perf_sou_skip)
+\t\t{
+\t\t\t--impl_->perf_sou_skip;
+\t\t}
+\t\telse
+\t\t{
+\t\t\tuint8_t decoded_sou[4096];
+\t\t\tDecodeBorderCapture(impl_->ppu.raw_framebuffer, decoded_sou);
+\t\t\tS9xSGBPerfSouTrn(decoded_sou);
+\t\t\timpl_->perf_sou_capture = false;
+\t\t}
+\t}
+#endif
+
+\tif (impl_->border_capture.stage != Impl::BorderCapture::Idle &&
+\t    impl_->ppu.frame_ready)
+\t{
+"""
+sc = replace_once(sc, tail_anchor, tail_new,
+                  "sgb.cpp PERF2 SOU capture tail")
+
+pct_commit_anchor = """\t\t++impl_->border_plane;
+\t\tif (cmd == 0x14) ++impl_->border_pct;
+\t\timpl_->border_capture.stage = Impl::BorderCapture::Idle;
+"""
+pct_commit_new = """\t\t++impl_->border_plane;
+\t\tif (cmd == 0x14)
+\t\t{
+\t\t\t++impl_->border_pct;
+#ifdef IKCORE_SGB_HYBRID_AUDIO
+\t\t\t// PCT_TRN is the atomic presentation point: tile data and map/palette
+\t\t\t// are now a coherent border.
+\t\t\tSgbRenderBorder(impl_->sgb_state, impl_->perf_stable_border);
+\t\t\timpl_->perf_stable_border_valid = true;
+#endif
+\t\t}
+\t\timpl_->border_capture.stage = Impl::BorderCapture::Idle;
+"""
+sc = replace_once(sc, pct_commit_anchor, pct_commit_new,
+                  "sgb.cpp PERF2 atomic PCT commit")
+
+# Use stable border in direct compositor.
+blit_anchor = """\tuint16_t *const staging = impl_->composite;
+\tSgbRenderBorder(impl_->sgb_state, staging);
+"""
+blit_new = """\tuint16_t *const staging = impl_->composite;
+#ifdef IKCORE_SGB_HYBRID_AUDIO
+\tif (impl_->perf_stable_border_valid)
+\t\tstd::memcpy(staging, impl_->perf_stable_border,
+\t\t            sizeof impl_->perf_stable_border);
+\telse
+\t\tSgbRenderBorder(impl_->sgb_state, staging);
+#else
+\tSgbRenderBorder(impl_->sgb_state, staging);
+#endif
+"""
+sc = replace_once(sc, blit_anchor, blit_new,
+                  "sgb.cpp PERF2 stable border blit")
+
+# Clean handoff helper. No reset: same GB CPU/PPU/APU/cart state continues.
+handoff_anchor = """bool Emulator::IsScreenVisible() const
+{
+\treturn impl_->sgb_state.mask_mode == SGB_MASK_CANCEL;
+}
+"""
+handoff_new = """bool Emulator::IsScreenVisible() const
+{
+\treturn impl_->sgb_state.mask_mode == SGB_MASK_CANCEL;
+}
+
+#ifdef IKCORE_SGB_HYBRID_AUDIO
+void Emulator::EnterPerfDirectMode()
+{
+\timpl_->host_bios_mode = 0;
+\timpl_->sgb_authentic = true;
+\timpl_->force_model = 3;
+\timpl_->joypad.sgb_active = false;
+\timpl_->joypad.mlt_players = impl_->sgb_state.mlt_players;
+\timpl_->joypad.mlt_index = impl_->sgb_state.mlt_current_player;
+\timpl_->ppu.cgb = false;
+\timpl_->ppu.dmg_compat = false;
+\timpl_->ppu.hold_present_on_enable = false;
+
+\t// If the game's PCT already landed while the BIOS was active, snapshot it
+\t// before the first direct composite.
+\tif (impl_->border_pct > 0)
+\t{
+\t\tSgbRenderBorder(impl_->sgb_state, impl_->perf_stable_border);
+\t\timpl_->perf_stable_border_valid = true;
+\t}
+}
+#endif
+"""
+sc = replace_once(sc, handoff_anchor, handoff_new,
+                  "sgb.cpp PERF2 handoff method")
+
+# C facade near the other boot-state helpers.
+facade_anchor = """bool S9xSGBScreenVisible (void)
+{
+\treturn SGB::Instance().IsScreenVisible();
+}
+"""
+facade_new = """bool S9xSGBScreenVisible (void)
+{
+\treturn SGB::Instance().IsScreenVisible();
+}
+#ifdef IKCORE_SGB_HYBRID_AUDIO
+void S9xSGBEnterPerfDirectMode (void)
+{
+\tSGB::Instance().EnterPerfDirectMode();
+}
+#endif
+"""
+sc = replace_once(sc, facade_anchor, facade_new,
+                  "sgb.cpp PERF2 handoff facade")
+SGBCPP.write_text(sc, encoding="utf-8")
+
+# ---- Loader: full BIOS bootstrap, then runtime switches to direct ----------
+MMC = ROOT / "supersnes9x" / "memmap.cpp"
+mc = MMC.read_text(encoding="utf-8-sig")
+
+lite_anchor = """#ifdef SGBPACK_LITE
+    // NES/SNES Classic fast path: use the dedicated GB/SGB engine directly
+"""
+lite_new = """#ifdef SGBPACK_LITE
+#ifdef IKCORE_SGB_HYBRID_AUDIO
+    // PERF2 starts through the real SGB BIOS so its N-SPC program, BRR sample
+    // tables and DSP state are initialized exactly by the console software.
+    // cpuexec switches to the direct GB/SGB engine after the cart finishes
+    // its power-on SGB setup, preserving this APU state.
+    S9xSGBSetForceModel(3);
+    S9xSGBSetRunMode(mode);
+    if (!S9xSGBLoadBootROMBytes(boot.data(), boot.size()))
+    {
+        S9xSGBDeinit();
+        return -1;
+    }
+    if (!S9xSGBLoadROMBytes(gb.data(), gb.size(), pack_path))
+    {
+        S9xSGBDeinit();
+        return -1;
+    }
+    S9xSGBPrepareBiosCart();
+    S9xSGBSetAudioRate(Settings.SoundPlaybackRate);
+
+    if (!LoadROMMem(sgb.data(), (uint32) sgb.size(), pack_path))
+    {
+        S9xSGBDeinit();
+        return -1;
+    }
+
+    S9xDeleteCheats();
+    Settings.SuperGameBoy       = FALSE;
+    Settings.SGB_BIOSModeActive = TRUE;
+    Settings.GameBoyRunMode     = mode;
+    Settings.GBClockMultiplier  = 1.0f;
+    S9xSGBSetRunMode(mode);
+    S9xMessage(S9X_INFO, S9X_ROM_INFO,
+               "IKCORE PERF2 hybrid: real SGB BIOS boot + retained SPC/DSP.");
+#else
+    // NES/SNES Classic fast path: use the dedicated GB/SGB engine directly
+"""
+mc = replace_once(mc, lite_anchor, lite_new,
+                  "memmap PERF2 hybrid bootstrap")
+
+lite_close_anchor = """    ROMFramesPerSecond          = 60;
+#else
+"""
+lite_close_new = """    ROMFramesPerSecond          = 60;
+#endif
+#else
+"""
+# The first occurrence after our new hybrid section is the direct-lite close.
+pos = mc.find("IKCORE PERF2 hybrid")
+idx = mc.find(lite_close_anchor, pos)
+if idx < 0:
+    raise SystemExit("memmap PERF2 direct-lite close anchor not found")
+mc = mc[:idx] + mc[idx:].replace(lite_close_anchor, lite_close_new, 1)
+MMC.write_text(mc, encoding="utf-8")
+
+# ---- CPU loop: switch after setup; advance retained SPC every direct frame --
+CPU = ROOT / "supersnes9x" / "cpuexec.cpp"
+cc = CPU.read_text(encoding="utf-8-sig")
+
+main_anchor = """\t// Super Game Boy mode — run the GB core for one frame and return.
+"""
+main_new = """#ifdef IKCORE_SGB_HYBRID_AUDIO
+\t// Once the real BIOS has initialized N-SPC and the cart has completed its
+\t// SGB setup, retire only the SNES CPU/PPU. The same GB/SGB instance and
+\t// live SPC700/DSP continue.
+\tif (Settings.SGB_BIOSModeActive &&
+\t    S9xSGBBIOSGBIsReleased() &&
+\t    S9xSGBBootHandoffCaptured() &&
+\t    S9xSGBBootSetupComplete() &&
+\t    S9xSGBScreenVisible())
+\t{
+\t\tS9xSGBEnterPerfDirectMode();
+\t\tS9xSGBPerfAudioEnable();
+\t\tSettings.SGB_BIOSModeActive = FALSE;
+\t\tSettings.SuperGameBoy = TRUE;
+\t\tSettings.PAL = FALSE;
+\t\tSettings.FrameTime = Settings.FrameTimeNTSC;
+\t\tROMFramesPerSecond = 60;
+\t\tS9xMessage(S9X_INFO, S9X_ROM_INFO,
+\t\t           "IKCORE PERF2 switch: direct GB/SGB + live SNES SPC/DSP.");
+\t}
+#endif
+
+\t// Super Game Boy mode — run the GB core for one frame and return.
+"""
+cc = replace_once(cc, main_anchor, main_new,
+                  "cpuexec PERF2 runtime switch")
+
+run_anchor = """\t\tS9xSGBRunFrame();
+\t\tif (!Settings.InRunAhead)
+"""
+run_new = """\t\tS9xSGBRunFrame();
+#ifdef IKCORE_SGB_HYBRID_AUDIO
+\t\tif (!Settings.InRunAhead && S9xSGBPerfAudioActive())
+\t\t\tS9xSGBPerfAudioFrame();
+#endif
+\t\tif (!Settings.InRunAhead)
+"""
+cc = replace_once(cc, run_anchor, run_new,
+                  "cpuexec PERF2 SPC frame step")
+CPU.write_text(cc, encoding="utf-8")
+
+# ---- PERF PPU: accurate during BIOS bootstrap and SGB transfer frames -------
+# The event-driven path remains the gameplay default. While BIOS is active,
+# keep the exact dual-FIFO path so initialization/transfer images are not
+# corrupted before the handoff.
+GBPPU = ROOT / "supersnes9x" / "sgb" / "gb_ppu.cpp"
+gp = GBPPU.read_text(encoding="utf-8-sig")
+gp = replace_once(gp, '#include "sgb.h"\n',
+                  '#include "sgb.h"\n#ifdef IKCORE_SGB_HYBRID_AUDIO\n#include "../snes9x.h"\n#endif\n',
+                  "gb_ppu PERF2 Settings include")
+
+perf_branch_old = """#ifdef IKCORE_SGB_PERF_PPU
+\t\t// NES Mini performance path: preserve mode timing/STAT/OAM locks but
+"""
+perf_branch_new = """#if defined(IKCORE_SGB_PERF_PPU)
+\t\tif (!Settings.SGB_BIOSModeActive)
+\t\t{
+\t\t// NES Mini performance path: preserve mode timing/STAT/OAM locks but
+"""
+gp = replace_once(gp, perf_branch_old, perf_branch_new,
+                  "gb_ppu PERF2 runtime fast open")
+
+perf_else_old = """\t\t\ttransitioned = Mode3Exit(p, p.tm, mem);
+\t\t}
+#else
+// Both machines advance on every mode-3 dot."""
+perf_else_new = """\t\t\ttransitioned = Mode3Exit(p, p.tm, mem);
+\t\t}
+\t\t}
+\t\telse
+\t\t{
+// Both machines advance on every mode-3 dot."""
+gp = replace_once(gp, perf_else_old, perf_else_new,
+                  "gb_ppu PERF2 runtime accurate else")
+
+perf_end_old = """\t\tp.window_active = p.om.fetch_is_window || p.om.win_carry;
+#endif
+\t\tbreak;
+"""
+perf_end_new = """\t\tp.window_active = p.om.fetch_is_window || p.om.win_carry;
+\t\t}
+#else
+// Non-PERF build: exact FIFO path.
+\t\tif (!p.tm.done && Mode3Dot(p, p.tm, mem))
+\t\t{
+\t\t\tp.tm.done = true;
+\t\t\ttransitioned = Mode3Exit(p, p.tm, mem);
+\t\t}
+\t\tif (!p.om.done && Mode3Dot(p, p.om, mem))
+\t\t{
+\t\t\tp.om.done = true;
+\t\t\tMode3WxCarry(p, p.om);
+\t\t\tMode3OutputExit(p, p.om);
+\t\t}
+\t\tp.draw_x        = p.om.lcd_x;
+\t\tp.window_active = p.om.fetch_is_window || p.om.win_carry;
+#endif
+\t\tbreak;
+"""
+gp = replace_once(gp, perf_end_old, perf_end_new,
+                  "gb_ppu PERF2 runtime fast close")
+GBPPU.write_text(gp, encoding="utf-8")
+
+print("IK Core PERF2 hybrid SNES audio + atomic border applied.")
