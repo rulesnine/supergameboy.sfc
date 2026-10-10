@@ -3839,3 +3839,67 @@ cc = replace_once(cc,
     "parallel SPC begin/end sandwich around GB frame")
 CPU.write_text(cc, encoding="utf-8")
 print("IKCORE PARALLEL SPC SAFE DISPATCH: independent SNES audio worker applied.")
+
+
+# ---- IKCORE AUDIO RATE LOCK: fixed frame-locked GB sample cadence -----------
+# RunFrame() frame-locks to 70224 emulated T-cycles per SNES VBlank, at
+# 60.09881389744051 fps. The upstream GB-APU DRC, however, steers to a
+# 12.5%-full GB ring BEFORE S9xLandSamples completely drains that ring each
+# frame. The pre-drain fill is ~533 stereo frames, not 1024, so the
+# integrator rails negative, oversamples, then overflows the frontend ALSA
+# ring. On the physical test this was ~32,450 produced vs 32,040 consumed.
+#
+# In this opt-in standalone NES Mini hybrid core only: derive the APU's
+# *sampling* clock from 70224 GB T-cycles per 60.0988 Hz host frame. This
+# changes neither GB channel frequency/timers nor SNES/SPC DSP rate; it
+# ensures that a fixed-rate output device consumes ~exactly as many PCM
+# samples as the frame-locked emulation generates, with no pitch-shifting
+# host resampler, no sample deletion and no extra frame/render work.
+#
+# BIOS startup never calls the direct-mode RunFrame(), so this cannot
+# accelerate, skip or alter the already-approved Super Game Boy boot fade.
+# If LCD is off and a different cycle budget is run, leave the audio ring
+# safety counters live to catch the rare non-frame-locked case.
+
+GBSRC = ROOT / "supersnes9x" / "sgb" / "sgb.cpp"
+gc = GBSRC.read_text(encoding="utf-8-sig")
+gc = replace_once(gc,
+    """\tconst uint32_t head = impl_->apu.sample_head;
+\tconst uint32_t tail = impl_->apu.sample_tail;
+\tconst uint32_t fill = (head >= tail) ? (head - tail)
+\t                                     : (APU_SAMPLE_BUF_SIZE - tail + head);
+\tconst double err = static_cast<double>(fill) / APU_SAMPLE_BUF_SIZE - 0.125;
+\timpl_->drc_integ += 5e-5 * err;
+\tif (impl_->drc_integ >  0.03) impl_->drc_integ =  0.03;
+\tif (impl_->drc_integ < -0.03) impl_->drc_integ = -0.03;
+\tdouble corr = 0.02 * err + impl_->drc_integ;
+\tif (corr >  0.03) corr =  0.03;
+\tif (corr < -0.03) corr = -0.03;
+\tApuSetClockHz(impl_->apu, static_cast<int32_t>(base_hz * (1.0 + corr) + 0.5));""",
+    """#ifdef IKCORE_SGB_PERF_AUDIO_RATE_LOCK
+\t// Only the APU sample period is changed. Emulated GB timer and
+\t// pitch/sweep/length events continue to run on authentic T-cycles.
+\t// Since this direct renderer locks one 70224-T-cycle GB frame to
+\t// each 60.0988-Hz SNES frame, this yields 32040 PCM stereo frames/s.
+\t// No PI feedback from a ring that is completely drained each frame.
+\tconstexpr double AUDIO_CYCLES_PER_HOST_FRAME = 70224.0;
+\tconst int32_t pcm_clock_hz = static_cast<int32_t>(
+\t\tAUDIO_CYCLES_PER_HOST_FRAME * SNES_FPS + 0.5);
+\tApuSetClockHz(impl_->apu, pcm_clock_hz);
+#else
+\tconst uint32_t head = impl_->apu.sample_head;
+\tconst uint32_t tail = impl_->apu.sample_tail;
+\tconst uint32_t fill = (head >= tail) ? (head - tail)
+\t                                     : (APU_SAMPLE_BUF_SIZE - tail + head);
+\tconst double err = static_cast<double>(fill) / APU_SAMPLE_BUF_SIZE - 0.125;
+\timpl_->drc_integ += 5e-5 * err;
+\tif (impl_->drc_integ >  0.03) impl_->drc_integ =  0.03;
+\tif (impl_->drc_integ < -0.03) impl_->drc_integ = -0.03;
+\tdouble corr = 0.02 * err + impl_->drc_integ;
+\tif (corr >  0.03) corr =  0.03;
+\tif (corr < -0.03) corr = -0.03;
+\tApuSetClockHz(impl_->apu, static_cast<int32_t>(base_hz * (1.0 + corr) + 0.5));
+#endif""",
+    "IKCORE AUDIO RATE LOCK direct SGB frame-locked PCM production")
+GBSRC.write_text(gc, encoding="utf-8")
+print("IKCORE AUDIO RATE LOCK: fixed 32040Hz GB APU PCM clock in direct mode.")
