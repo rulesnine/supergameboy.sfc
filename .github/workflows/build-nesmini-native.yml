@@ -7,63 +7,85 @@ on:
       - 'native/**'
       - '.github/workflows/build-nesmini-native.yml'
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout project
+        uses: actions/checkout@v4
 
-      - name: Fetch Linaro ARMv7 toolchain + glibc 2.23 sysroot
+      - name: Install host tools
         run: |
-          set -eux
-          mkdir -p toolchain dist
-          cd toolchain
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y file dpkg-dev
 
-          curl -fL --retry 3 -o gcc.tar.xz             https://releases.linaro.org/components/toolchain/binaries/6.3-2017.05/arm-linux-gnueabihf/gcc-linaro-6.3.1-2017.05-x86_64_arm-linux-gnueabihf.tar.xz
+      - name: Checkout known-good Linaro GCC 7 ARMhf toolchain
+        uses: actions/checkout@v4
+        with:
+          repository: MayuriLabs/linaro_arm-linux-gnueabihf-7.5
+          ref: master
+          path: toolchain
+          fetch-depth: 1
 
-          curl -fL --retry 3 -o sysroot.tar.xz             https://releases.linaro.org/components/toolchain/binaries/6.3-2017.05/arm-linux-gnueabihf/sysroot-glibc-linaro-2.23-2017.05-arm-linux-gnueabihf.tar.xz
-
-          tar -xf gcc.tar.xz
-          tar -xf sysroot.tar.xz
-
-      - name: Build ARMv7 for NES Mini glibc 2.23
+      - name: Prepare known-good Xenial ARMhf GLIBC 2.23 sysroot
         run: |
-          set -eux
+          set -e
+          mkdir -p "$GITHUB_WORKSPACE/xenial-debs" "$GITHUB_WORKSPACE/xenial-sysroot"
 
-          TC="$PWD/toolchain/gcc-linaro-6.3.1-2017.05-x86_64_arm-linux-gnueabihf"
-          SYSROOT="$PWD/toolchain/sysroot-glibc-linaro-2.23-2017.05-arm-linux-gnueabihf"
-          CC="$TC/bin/arm-linux-gnueabihf-gcc"
-          STRIP="$TC/bin/arm-linux-gnueabihf-strip"
-          READELF="$TC/bin/arm-linux-gnueabihf-readelf"
+          docker run --rm             -v "$GITHUB_WORKSPACE/xenial-debs:/out"             ubuntu:16.04 bash -ec '
+              printf "%s\n"                 "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial main universe"                 "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial-updates main universe"                 "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial-security main universe"                 > /etc/apt/sources.list
+              apt-get update
+              cd /out
+              apt-get download libc6:armhf libc6-dev:armhf linux-libc-dev:armhf
+            '
 
-          COMMON="-O3 -pipe -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -D_FILE_OFFSET_BITS=64 --sysroot=$SYSROOT"
+          for pkg in "$GITHUB_WORKSPACE"/xenial-debs/*.deb; do
+            dpkg-deb -x "$pkg" "$GITHUB_WORKSPACE/xenial-sysroot"
+          done
 
-          "$CC" $COMMON native/sgbpack_native_n1.c -o dist/sgbpack-native -ldl
-          "$STRIP" dist/sgbpack-native
+          test -e "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6"
+          test -e "$GITHUB_WORKSPACE/xenial-sysroot/usr/include/stdio.h"
+          strings "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6" | grep -q "GLIBC_2.23"
+
+      - name: Build N1.7 for NES Mini
+        run: |
+          set -e
+          CC="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc"
+          STRIP="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-strip"
+          READELF="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf"
+          SYSROOT="$GITHUB_WORKSPACE/xenial-sysroot"
+
+          mkdir -p dist
+
+          "$CC"             --sysroot="$SYSROOT"             -O3 -pipe             -march=armv7-a -mtune=cortex-a7             -mfpu=neon-vfpv4 -mfloat-abi=hard             -D_FILE_OFFSET_BITS=64             native/sgbpack_native_n1.c             -o dist/sgbpack-native             -ldl
 
           file dist/sgbpack-native
-          "$READELF" -l dist/sgbpack-native > dist/PROGRAM_HEADERS.txt
-          "$READELF" -d dist/sgbpack-native > dist/DYNAMIC.txt
-          "$READELF" --version-info dist/sgbpack-native > dist/VERSIONS.txt
-          cat dist/VERSIONS.txt
+          "$READELF" -h dist/sgbpack-native | tee dist/ELF_HEADER.txt
+          "$READELF" -d dist/sgbpack-native | tee dist/DYNAMIC.txt
+          "$READELF" -V dist/sgbpack-native | tee dist/VERSIONS.txt
 
-          python3 - <<'PY'
-          import re, pathlib, sys
-          text = pathlib.Path("dist/VERSIONS.txt").read_text(errors="ignore")
-          versions = sorted({(int(a), int(b)) for a,b in re.findall(r"GLIBC_(\d+)\.(\d+)", text)})
-          print("GLIBC requeridas:", versions)
-          bad = [v for v in versions if v > (2,23)]
-          if bad:
-              print("ERROR: binario incompatible con NES Mini; requiere:", bad)
-              sys.exit(1)
-          print("ABI NES Mini: OK, no requiere GLIBC > 2.23")
-          PY
+          file dist/sgbpack-native | grep -q "ELF 32-bit"
+          "$READELF" -h dist/sgbpack-native | grep -q "Machine:.*ARM"
+          "$READELF" -h dist/sgbpack-native | grep -q "hard-float ABI"
 
+          if "$READELF" -V dist/sgbpack-native | grep -Eq 'GLIBC_2\.(2[4-9]|[3-9][0-9])'; then
+            echo "ERROR: sgbpack-native requires GLIBC newer than 2.23"
+            "$READELF" -V dist/sgbpack-native | grep -E 'GLIBC_2\.'
+            exit 1
+          fi
+
+          "$STRIP" --strip-unneeded dist/sgbpack-native
           sha256sum dist/sgbpack-native | tee dist/SHA256SUMS.txt
+          echo "NES Mini ABI/GLIBC check: OK"
 
       - name: Build HMOD
         run: |
-          set -eux
+          set -e
           rm -rf hmod-stage
           mkdir -p hmod-stage/bin
           cp dist/sgbpack-native hmod-stage/bin/sgbpack-native
@@ -89,11 +111,13 @@ jobs:
           cp native/README.md dist/README-NATIVE.txt
           tar -C dist -czf IkCore-NESMini-Native-N1_7-EGL-GLIBC223.tar.gz .
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload N1.7 HMOD
+        uses: actions/upload-artifact@v4
         with:
           name: IkCore-Native-N1_7-EGL-GLIBC223-HMOD
           path: |
             IkCore-Native-N1_7-EGL-GLIBC223.hmod
             IkCore-Native-N1_7-EGL-GLIBC223.hmod.sha256
             IkCore-NESMini-Native-N1_7-EGL-GLIBC223.tar.gz
+          retention-days: 30
           if-no-files-found: error
