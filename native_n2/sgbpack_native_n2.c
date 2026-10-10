@@ -980,10 +980,8 @@ int main(int argc, char **argv)
                (double)g_core_aspect);
     log_printf("timing      : %.3f fps / %.0f Hz audio (audio descartado)\n",
                avinfo.timing.fps, avinfo.timing.sample_rate);
-    log_printf("video path  : RGB565 directo a Mali + textura persistente
-");
-    log_printf("benchmark   : %.0f s SIN limitador, motor SGB completo
-", IKCORE_BENCH_SECONDS);
+    log_printf("video path  : RGB565 directo a Mali + textura persistente\\n");
+    log_printf("benchmark   : %.0f s SIN limitador, motor SGB completo\\n", IKCORE_BENCH_SECONDS);
 
     start = last = now_s();
     end = start + IKCORE_BENCH_SECONDS;
