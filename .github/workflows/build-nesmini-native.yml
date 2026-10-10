@@ -49,6 +49,7 @@ jobs:
           done
 
           test -e "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6"
+          test -e "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libdl.so.2"
           test -e "$GITHUB_WORKSPACE/xenial-sysroot/usr/include/stdio.h"
           strings "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6" | grep -q "GLIBC_2.23"
 
