@@ -1653,3 +1653,300 @@ if scan_guard not in cx:
 
 CPUX.write_text(cx, encoding="utf-8")
 print("IK Core N3.2 scanline/ICD2 SGB synchronization applied.")
+
+
+# ---- A7 OPT 1/5: fixed-profile specialization (N2.10 philosophy)
+# This build is exclusively the authentic SGB1 BIOS path used by SGBPACK:
+# NTSC SGB1, DMG-side GB execution, no SA1/SuperFX/NSS/SFCBox/VoiceKun.
+# We keep all SGB-visible timing/state, but turn invariants into compile-time
+# facts so GCC/LTO can delete generic branches from the hottest loops.
+
+CPUX = ROOT / "supersnes9x" / "cpuexec.cpp"
+cx = CPUX.read_text(encoding="utf-8-sig")
+
+# Full SGBPACK never uses the BIOS-less Settings.SuperGameBoy path.
+direct_start = """\t// Super Game Boy mode — run the GB core for one frame and return.
+\t// The 65816 loop below is bypassed entirely; snes9x's frontends
+\t// call S9xMainLoop once per frame, so this satisfies the contract.
+\tif (Settings.SuperGameBoy)
+\t{
+"""
+direct_start_new = """\t// Super Game Boy mode — run the GB core for one frame and return.
+\t// The 65816 loop below is bypassed entirely; snes9x's frontends
+\t// call S9xMainLoop once per frame, so this satisfies the contract.
+#ifndef IKCORE_SGB_FIXED_PROFILE
+\tif (Settings.SuperGameBoy)
+\t{
+"""
+cx = replace_once(cx, direct_start, direct_start_new,
+                  "cpuexec fixed profile direct-path open")
+
+direct_end = """\t\tCPU.Flags |= SCAN_KEYS_FLAG;
+\t\treturn;
+\t}
+
+\t#define CHECK_FOR_IRQ_CHANGE() \\
+"""
+direct_end_new = """\t\tCPU.Flags |= SCAN_KEYS_FLAG;
+\t\treturn;
+\t}
+#endif
+
+\t#define CHECK_FOR_IRQ_CHANGE() \\
+"""
+cx = replace_once(cx, direct_end, direct_end_new,
+                  "cpuexec fixed profile direct-path close")
+
+# Compile out unrelated cartridge/supervisor hardware from the per-opcode loop.
+cx = replace_once(cx,
+"""\t\tif (Settings.SFCBox)
+\t\t{
+""",
+"""#ifndef IKCORE_SGB_FIXED_PROFILE
+\t\tif (Settings.SFCBox)
+\t\t{
+""",
+"cpuexec fixed profile SFCBox open")
+cx = replace_once(cx,
+"""\t\t}
+
+\t\tif (Settings.NSS)
+\t\t{
+""",
+"""\t\t}
+#endif
+
+#ifndef IKCORE_SGB_FIXED_PROFILE
+\t\tif (Settings.NSS)
+\t\t{
+""",
+"cpuexec fixed profile SFCBox close/NSS open")
+cx = replace_once(cx,
+"""\t\t}
+
+\t\tif (CPU.NMIPending)
+""",
+"""\t\t}
+#endif
+
+\t\tif (CPU.NMIPending)
+""",
+"cpuexec fixed profile NSS close")
+
+cx = replace_once(cx,
+"""\t\t\t// Voicer-kun: the game names a CD track, starts it, or ends the voice.
+\t\t\tif (Settings.VoiceKun)
+\t\t\t{
+""",
+"""\t\t\t// Voicer-kun: the game names a CD track, starts it, or ends the voice.
+#ifndef IKCORE_SGB_FIXED_PROFILE
+\t\t\tif (Settings.VoiceKun)
+\t\t\t{
+""",
+"cpuexec fixed profile VoiceKun open")
+cx = replace_once(cx,
+"""\t\t\t}
+
+\t\t\tuint8\t\t\t\tOp;
+""",
+"""\t\t\t}
+#endif
+
+\t\t\tuint8\t\t\t\tOp;
+""",
+"cpuexec fixed profile VoiceKun close")
+
+cx = replace_once(cx,
+"""\t\tif (Settings.SA1)
+\t\t\tS9xSA1MainLoop();
+
+\t\t// Per-SNES-opcode GB sync""",
+"""#ifndef IKCORE_SGB_FIXED_PROFILE
+\t\tif (Settings.SA1)
+\t\t\tS9xSA1MainLoop();
+#endif
+
+\t\t// Per-SNES-opcode GB sync""",
+"cpuexec fixed profile SA1 per opcode")
+
+# The full SGBPACK build enters S9xMainLoop only with BIOS mode active.
+# Replace read-only Settings checks with a compile-time true expression.
+marker = '#include "voicekun.h"\n'
+macro = '''#include "voicekun.h"
+
+#ifdef IKCORE_SGB_FIXED_PROFILE
+#define IKCORE_SGB_BIOS_ACTIVE true
+#else
+#define IKCORE_SGB_BIOS_ACTIVE Settings.SGB_BIOSModeActive
+#endif
+'''
+cx = replace_once(cx, marker, macro, "cpuexec fixed profile BIOS macro")
+cx = cx.replace("Settings.SGB_BIOSModeActive", "IKCORE_SGB_BIOS_ACTIVE")
+# Restore the macro's fallback after the global replacement.
+cx = cx.replace("#define IKCORE_SGB_BIOS_ACTIVE IKCORE_SGB_BIOS_ACTIVE",
+                "#define IKCORE_SGB_BIOS_ACTIVE Settings.SGB_BIOSModeActive")
+
+# Scanline-only generic coprocessor/device hooks are impossible for the SGB ROM.
+cx = replace_once(cx,
+"""\t\t\tif (Settings.SuperFX)
+\t\t\t{
+\t\t\t\tif (!SuperFX.oneLineDone)
+\t\t\t\t\tS9xSuperFXExec();
+\t\t\t\tSuperFX.oneLineDone = FALSE;
+\t\t\t}
+""",
+"""#ifndef IKCORE_SGB_FIXED_PROFILE
+\t\t\tif (Settings.SuperFX)
+\t\t\t{
+\t\t\t\tif (!SuperFX.oneLineDone)
+\t\t\t\t\tS9xSuperFXExec();
+\t\t\t\tSuperFX.oneLineDone = FALSE;
+\t\t\t}
+#endif
+""",
+"cpuexec fixed profile SuperFX")
+
+for label, block in [
+("SFCBox scanline", """\t\t\tif (Settings.SFCBox)
+\t\t\t\tS9xSFCBoxEndScanline();
+"""),
+("NSS scanline", """\t\t\tif (Settings.NSS)
+\t\t\t\tS9xNSSEndScanline();
+"""),
+("SuperDisc scanline", """\t\t\tif (Settings.SuperDisc)
+\t\t\t\tS9xSuperDiscEndScanline();
+"""),
+("RP2040 scanline", """\t\t\tif (Settings.RP2040Cart)
+\t\t\t\tS9xRP2040CartEndScanline();
+"""),
+("SA1 scanline", """\t\t\tif (Settings.SA1)
+\t\t\t\tSA1.Cycles -= Timings.H_Max * 3;
+""")
+]:
+    cx = replace_once(cx, block,
+                      "#ifndef IKCORE_SGB_FIXED_PROFILE\n" + block + "#endif\n",
+                      "cpuexec fixed profile " + label)
+
+CPUX.write_text(cx, encoding="utf-8")
+
+# GB PPU: in an authentic SGB1 BIOS session the GB side is DMG, never CGB.
+# Replace the runtime p.cgb tests by a compile-time false predicate only for
+# this specialized build. Generic builds retain the original behavior.
+PPUCPP = ROOT / "supersnes9x" / "sgb" / "gb_ppu.cpp"
+pc = PPUCPP.read_text(encoding="utf-8-sig")
+ns = "namespace SGB {\\n"
+pred = """namespace SGB {
+
+#ifdef IKCORE_SGB_FIXED_PROFILE
+#define IKCORE_PPU_CGB(p) false
+#else
+#define IKCORE_PPU_CGB(p) ((p).cgb)
+#endif
+"""
+pc = replace_once(pc, ns, pred, "gb_ppu fixed profile predicate")
+cgb_reads = pc.count("p.cgb")
+if cgb_reads < 30:
+    raise SystemExit(f"gb_ppu.cpp: expected many p.cgb hot-path reads, found {cgb_reads}")
+pc = pc.replace("p.cgb", "IKCORE_PPU_CGB(p)")
+PPUCPP.write_text(pc, encoding="utf-8")
+
+# SGB clock bridge: SGBPACK's authentic target is SGB1, whose hardware ratio
+# is exactly SNES master / 5. Remove the per-sync run-mode dispatch and 64-bit
+# division while keeping the same remainder accumulator and RunSyncCycles path.
+SGBCPP = ROOT / "supersnes9x" / "sgb" / "sgb.cpp"
+sc = SGBCPP.read_text(encoding="utf-8-sig")
+tick_old = """\tint32_t gb_cycles;
+\tconst SGB::RunMode mode = SGB::Instance().GetRunMode();
+\tif (mode == SGB::RunMode::SGB)
+\t{
+\t\t// Exact: subtracting gb_cycles*5 reverses accum/5 with no remainder.
+\t\tg_snes_cycle_accum += snes_master_cycles;
+\t\tgb_cycles = g_snes_cycle_accum / 5;
+\t\tif (gb_cycles > 0)
+\t\t{
+\t\t\tg_snes_cycle_accum -= gb_cycles * 5;
+#ifdef IKCORE_SGB_FULL_FASTSYNC
+\t\t\tSGB::Instance().RunSyncCycles(gb_cycles);
+#else
+\t\t\tSGB::Instance().RunCycles(gb_cycles);
+#endif
+\t\t}
+\t}
+\telse
+\t{
+"""
+tick_new = """\tint32_t gb_cycles;
+#ifdef IKCORE_SGB_FIXED_PROFILE
+\t// Authentic SGB1: fixed ICD2 clock ratio, no runtime mode dispatch.
+\tg_snes_cycle_accum += snes_master_cycles;
+\tgb_cycles = g_snes_cycle_accum / 5;
+\tif (gb_cycles > 0)
+\t{
+\t\tg_snes_cycle_accum -= gb_cycles * 5;
+#ifdef IKCORE_SGB_FULL_FASTSYNC
+\t\tSGB::Instance().RunSyncCycles(gb_cycles);
+#else
+\t\tSGB::Instance().RunCycles(gb_cycles);
+#endif
+\t}
+#else
+\tconst SGB::RunMode mode = SGB::Instance().GetRunMode();
+\tif (mode == SGB::RunMode::SGB)
+\t{
+\t\t// Exact: subtracting gb_cycles*5 reverses accum/5 with no remainder.
+\t\tg_snes_cycle_accum += snes_master_cycles;
+\t\tgb_cycles = g_snes_cycle_accum / 5;
+\t\tif (gb_cycles > 0)
+\t\t{
+\t\t\tg_snes_cycle_accum -= gb_cycles * 5;
+#ifdef IKCORE_SGB_FULL_FASTSYNC
+\t\t\tSGB::Instance().RunSyncCycles(gb_cycles);
+#else
+\t\t\tSGB::Instance().RunCycles(gb_cycles);
+#endif
+\t\t}
+\t}
+\telse
+\t{
+"""
+sc = replace_once(sc, tick_old, tick_new, "sgb fixed profile SGB1 clock path")
+
+tick_close = """\t\t}
+\t}
+}
+
+void S9xSGBResetSyncAnchor"""
+tick_close_new = """\t\t}
+\t}
+#endif
+}
+
+void S9xSGBResetSyncAnchor"""
+sc = replace_once(sc, tick_close, tick_close_new, "sgb fixed profile SGB1 clock close")
+
+# RunSyncCycles is called at every scanline/ICD2 catch-up. BIOS SGB1 implies
+# DMG PPU and no SGBC overlay, so make those invariant setup values explicit.
+sync_setup = """\timpl_->apu.suppress_nrx2_glitch = impl_->SuppressNrxGlitches();
+\timpl_->ppu.cgb = impl_->CgbActive();
+\timpl_->ppu.dmg_compat = impl_->ppu.cgb && impl_->dmg_compat_cgb &&
+\t\t(!impl_->mem.boot_rom_enabled || (impl_->mem.key0 & 0x04));
+\timpl_->ppu.hold_present_on_enable = !impl_->BiosMode() &&
+\t\t(impl_->cgb_mode || impl_->run_mode == RunMode::DMG);
+"""
+sync_setup_new = """\timpl_->apu.suppress_nrx2_glitch = impl_->SuppressNrxGlitches();
+#ifdef IKCORE_SGB_FIXED_PROFILE
+\timpl_->ppu.cgb = false;
+\timpl_->ppu.dmg_compat = false;
+\timpl_->ppu.hold_present_on_enable = false;
+#else
+\timpl_->ppu.cgb = impl_->CgbActive();
+\timpl_->ppu.dmg_compat = impl_->ppu.cgb && impl_->dmg_compat_cgb &&
+\t\t(!impl_->mem.boot_rom_enabled || (impl_->mem.key0 & 0x04));
+\timpl_->ppu.hold_present_on_enable = !impl_->BiosMode() &&
+\t\t(impl_->cgb_mode || impl_->run_mode == RunMode::DMG);
+#endif
+"""
+sc = replace_once(sc, sync_setup, sync_setup_new, "sgb fixed profile RunSync setup")
+
+SGBCPP.write_text(sc, encoding="utf-8")
+print("IK Core A7 OPT 1/5 fixed-profile specialization applied.")
