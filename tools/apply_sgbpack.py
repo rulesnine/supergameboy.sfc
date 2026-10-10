@@ -1408,3 +1408,39 @@ gp = replace_once(gp, raw0_anchor, raw0_new,
 
 GBPPU.write_text(gp, encoding="utf-8")
 print("IK Core N2.9 exact Mode-3 sprite masks applied.")
+
+
+# ---- N2.10 fixed default timing knobs for the single-core NES Mini runtime
+# gb_knob.h intentionally uses function-local statics so generic multi-core
+# test runners can set ACID_* environment overrides safely. The NES Mini
+# runtime never sets those overrides and runs one core instance. Compile the
+# exact tuned defaults as constants so hot PPU paths do not execute C++ local
+# static guard checks on every dot. This changes configurability, not the
+# default timing values used by the emulator.
+
+GBKNOB = ROOT / "supersnes9x" / "sgb" / "gb_knob.h"
+gk = GBKNOB.read_text(encoding="utf-8-sig")
+
+knob_anchor = """inline int AcidKnob(const char *name, int def)
+{
+\tconst char *e = getenv(name);
+\treturn e ? atoi(e) : def;
+}
+"""
+knob_new = """#ifdef IKCORE_FIXED_ACID_KNOBS
+// Dedicated single-core NES Mini build: no ACID_* environment overrides are
+// used. Expanding to the exact default lets the compiler constant-fold the
+// per-dot tuning checks while preserving the tuned default behavior.
+#define AcidKnob(name, def) (def)
+#else
+inline int AcidKnob(const char *name, int def)
+{
+\tconst char *e = getenv(name);
+\treturn e ? atoi(e) : def;
+}
+#endif
+"""
+gk = replace_once(gk, knob_anchor, knob_new, "gb_knob.h fixed-default fast path")
+GBKNOB.write_text(gk, encoding="utf-8")
+
+print("IK Core N2.10 fixed default timing knobs applied.")
