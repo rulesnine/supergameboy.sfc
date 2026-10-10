@@ -2444,11 +2444,11 @@ print("IK Core PERF1 direct/event-driven SGB PPU applied.")
 # ---- APU public helpers -----------------------------------------------------
 APUH = ROOT / "supersnes9x" / "apu" / "apu.h"
 ah = APUH.read_text(encoding="utf-8-sig")
-apu_decl_anchor = """void S9xSpcSyncToConsumption(void);
-void S9xSpcSyncReset(void);
+apu_decl_anchor = """void   S9xSpcSyncToConsumption(void);
+void   S9xSpcSyncReset(void);
 """
-apu_decl_new = """void S9xSpcSyncToConsumption(void);
-void S9xSpcSyncReset(void);
+apu_decl_new = """void   S9xSpcSyncToConsumption(void);
+void   S9xSpcSyncReset(void);
 
 #ifdef IKCORE_SGB_HYBRID_AUDIO
 // Ik Core PERF2: preserve the SGB BIOS-initialized N-SPC engine after the
