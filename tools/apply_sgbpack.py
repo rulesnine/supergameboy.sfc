@@ -1834,7 +1834,7 @@ CPUX.write_text(cx, encoding="utf-8")
 # this specialized build. Generic builds retain the original behavior.
 PPUCPP = ROOT / "supersnes9x" / "sgb" / "gb_ppu.cpp"
 pc = PPUCPP.read_text(encoding="utf-8-sig")
-ns = "namespace SGB {\\n"
+ns = "namespace SGB {\n"
 pred = """namespace SGB {
 
 #ifdef IKCORE_SGB_FIXED_PROFILE
