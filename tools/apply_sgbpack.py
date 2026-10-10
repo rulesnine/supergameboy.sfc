@@ -3032,3 +3032,89 @@ gp = replace_once(gp, perf_end_old, perf_end_new,
 GBPPU.write_text(gp, encoding="utf-8")
 
 print("IK Core PERF2 hybrid SNES audio + atomic border applied.")
+
+
+# ---- PERF2 follow-up: exact GB PPU only while a transfer frame is captured --
+# Gameplay remains event-driven. CHR_TRN/PCT_TRN/SOU_TRN capture frames use the
+# exact FIFO path so transfer payloads are never decoded from a simplified line.
+
+SGBH = ROOT / "supersnes9x" / "sgb" / "sgb.h"
+sh = SGBH.read_text(encoding="utf-8-sig")
+a = """\tvoid    EnterPerfDirectMode();
+#endif
+"""
+b = """\tvoid    EnterPerfDirectMode();
+\tbool    PerfNeedsAccuratePpu() const;
+#endif
+"""
+sh = replace_once(sh, a, b, "sgb.h PERF2 accurate-transfer method")
+a = """void          S9xSGBEnterPerfDirectMode (void);
+#endif
+"""
+b = """void          S9xSGBEnterPerfDirectMode (void);
+bool          S9xSGBPerfNeedsAccuratePpu (void);
+#endif
+"""
+sh = replace_once(sh, a, b, "sgb.h PERF2 accurate-transfer facade")
+SGBH.write_text(sh, encoding="utf-8")
+
+SGBCPP = ROOT / "supersnes9x" / "sgb" / "sgb.cpp"
+sc = SGBCPP.read_text(encoding="utf-8-sig")
+a = """void Emulator::EnterPerfDirectMode()
+{
+"""
+# Add method after EnterPerfDirectMode body using the closing marker nearby.
+end = """\tif (impl_->border_pct > 0)
+\t{
+\t\tSgbRenderBorder(impl_->sgb_state, impl_->perf_stable_border);
+\t\timpl_->perf_stable_border_valid = true;
+\t}
+}
+#endif
+"""
+rep = """\tif (impl_->border_pct > 0)
+\t{
+\t\tSgbRenderBorder(impl_->sgb_state, impl_->perf_stable_border);
+\t\timpl_->perf_stable_border_valid = true;
+\t}
+}
+
+bool Emulator::PerfNeedsAccuratePpu() const
+{
+\treturn impl_->border_capture.stage != Impl::BorderCapture::Idle ||
+\t       impl_->perf_sou_capture;
+}
+#endif
+"""
+sc = replace_once(sc, end, rep, "sgb.cpp PERF2 accurate-transfer method")
+fac = """void S9xSGBEnterPerfDirectMode (void)
+{
+\tSGB::Instance().EnterPerfDirectMode();
+}
+#endif
+"""
+fac2 = """void S9xSGBEnterPerfDirectMode (void)
+{
+\tSGB::Instance().EnterPerfDirectMode();
+}
+bool S9xSGBPerfNeedsAccuratePpu (void)
+{
+\treturn SGB::Instance().PerfNeedsAccuratePpu();
+}
+#endif
+"""
+sc = replace_once(sc, fac, fac2, "sgb.cpp PERF2 accurate-transfer facade")
+SGBCPP.write_text(sc, encoding="utf-8")
+
+GBPPU = ROOT / "supersnes9x" / "sgb" / "gb_ppu.cpp"
+gp = GBPPU.read_text(encoding="utf-8-sig")
+a = """\t\tif (!Settings.SGB_BIOSModeActive)
+\t\t{
+\t\t// NES Mini performance path:"""
+b = """\t\tif (!Settings.SGB_BIOSModeActive && !S9xSGBPerfNeedsAccuratePpu())
+\t\t{
+\t\t// NES Mini performance path:"""
+gp = replace_once(gp, a, b, "gb_ppu PERF2 transfer fallback")
+GBPPU.write_text(gp, encoding="utf-8")
+
+print("IK Core PERF2 exact-transfer PPU fallback applied.")
