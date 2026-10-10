@@ -1,10 +1,12 @@
-name: Build NES Mini Native N1.7 EGL HMOD
+name: Build NES Mini Native N2 SGB Engine HMOD
 
 on:
   workflow_dispatch:
   push:
     paths:
       - 'native/**'
+      - 'native_n2/**'
+      - 'tools/apply_sgbpack.py'
       - '.github/workflows/build-nesmini-native.yml'
 
 permissions:
@@ -15,14 +17,24 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout project
+      - name: Checkout Ik Core project
         uses: actions/checkout@v4
+        with:
+          path: ikcore-project
+
+      - name: Checkout pinned SuperSnes9x
+        uses: actions/checkout@v4
+        with:
+          repository: shanytc/snes9x
+          ref: 183e03e5efed3b6d450385c98e2ccffb194153c3
+          submodules: false
+          path: supersnes9x
 
       - name: Install host tools
         run: |
           set -e
           sudo apt-get update
-          sudo apt-get install -y file dpkg-dev
+          sudo apt-get install -y file dpkg-dev bc
 
       - name: Checkout known-good Linaro GCC 7 ARMhf toolchain
         uses: actions/checkout@v4
@@ -32,13 +44,19 @@ jobs:
           path: toolchain
           fetch-depth: 1
 
-      - name: Prepare known-good Xenial ARMhf GLIBC 2.23 sysroot
+      - name: Prepare Xenial ARMhf GLIBC 2.23 sysroot
         run: |
           set -e
           mkdir -p "$GITHUB_WORKSPACE/xenial-debs" "$GITHUB_WORKSPACE/xenial-sysroot"
 
-          docker run --rm             -v "$GITHUB_WORKSPACE/xenial-debs:/out"             ubuntu:16.04 bash -ec '
-              printf "%s\n"                 "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial main universe"                 "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial-updates main universe"                 "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial-security main universe"                 > /etc/apt/sources.list
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/xenial-debs:/out" \
+            ubuntu:16.04 bash -ec '
+              printf "%s\n" \
+                "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial main universe" \
+                "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial-updates main universe" \
+                "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial-security main universe" \
+                > /etc/apt/sources.list
               apt-get update
               cd /out
               apt-get download libc6:armhf libc6-dev:armhf linux-libc-dev:armhf
@@ -50,10 +68,81 @@ jobs:
 
           test -e "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6"
           test -e "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libdl.so.2"
+          test -e "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6"
           test -e "$GITHUB_WORKSPACE/xenial-sysroot/usr/include/stdio.h"
           strings "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6" | grep -q "GLIBC_2.23"
 
-      - name: Build N1.7 for NES Mini
+          mkdir -p "$GITHUB_WORKSPACE/wrappers"
+          cat > "$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc" <<'EOF'
+          #!/bin/sh
+          exec "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc" --sysroot="$GITHUB_WORKSPACE/xenial-sysroot" "$@"
+          EOF
+          cat > "$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++" <<'EOF'
+          #!/bin/sh
+          exec "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-g++" --sysroot="$GITHUB_WORKSPACE/xenial-sysroot" -std=gnu++17 "$@"
+          EOF
+          chmod +x "$GITHUB_WORKSPACE"/wrappers/*
+          "$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc" -dumpversion
+          "$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++" -dumpversion
+
+      - name: Apply SGBPACK integration
+        run: |
+          set -e
+          python3 ikcore-project/tools/apply_sgbpack.py
+          cd supersnes9x
+          git diff --check
+          grep -q "Ik Core loaded SGBPACK1" memmap.cpp
+
+      - name: Build full SGBPACK core for ARMv7
+        working-directory: supersnes9x/libretro
+        run: |
+          set -e
+          make clean || true
+          make -j2 \
+            platform=classic_armv7_a7 \
+            CC="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc" \
+            CXX="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++" \
+            AR="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar" \
+            STRIP="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-strip" \
+            HAVE_UNZIP=0 \
+            LDFLAGS="-flto=4 -static-libgcc -static-libstdc++" \
+            LIBS="$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6"
+
+      - name: Verify and stage full SGB core
+        working-directory: supersnes9x/libretro
+        run: |
+          set -e
+          READELF="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf"
+          STRIP="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-strip"
+          CORE=supersnes9x_libretro.so
+          test -f "$CORE"
+
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          {
+            echo "=== CORE file ==="
+            file "$CORE"
+            echo "=== CORE ELF ==="
+            "$READELF" -h "$CORE"
+            echo "=== CORE dynamic ==="
+            "$READELF" -d "$CORE"
+            echo "=== CORE versions ==="
+            "$READELF" -V "$CORE"
+          } | tee "$GITHUB_WORKSPACE/dist/CORE-VERIFY.txt"
+
+          file "$CORE" | grep -q "ELF 32-bit"
+          "$READELF" -h "$CORE" | grep -q "Machine:.*ARM"
+          "$READELF" -h "$CORE" | grep -q "hard-float ABI"
+
+          if "$READELF" -V "$CORE" | grep -Eq 'GLIBC_2\.(2[4-9]|[3-9][0-9])'; then
+            echo "ERROR: core requires GLIBC newer than 2.23"
+            exit 1
+          fi
+
+          cp "$CORE" "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so"
+          "$STRIP" --strip-unneeded "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so"
+          sha256sum "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so" > "$GITHUB_WORKSPACE/dist/SHA256-core.txt"
+
+      - name: Build N2 EGL frontend
         run: |
           set -e
           CC="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc"
@@ -61,64 +150,91 @@ jobs:
           READELF="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf"
           SYSROOT="$GITHUB_WORKSPACE/xenial-sysroot"
 
-          mkdir -p dist
+          "$CC" \
+            --sysroot="$SYSROOT" \
+            -std=gnu11 -O3 -pipe \
+            -march=armv7-a -mtune=cortex-a7 \
+            -mfpu=neon-vfpv4 -mfloat-abi=hard \
+            -D_FILE_OFFSET_BITS=64 \
+            -I"$GITHUB_WORKSPACE/supersnes9x/libretro" \
+            "$GITHUB_WORKSPACE/ikcore-project/native_n2/sgbpack_native_n2.c" \
+            -o "$GITHUB_WORKSPACE/dist/sgbpack-native-n2" \
+            -Wl,-rpath-link,"$SYSROOT/lib/arm-linux-gnueabihf" \
+            "$SYSROOT/lib/arm-linux-gnueabihf/libdl.so.2"
 
-          "$CC"             --sysroot="$SYSROOT"             -O3 -pipe             -march=armv7-a -mtune=cortex-a7             -mfpu=neon-vfpv4 -mfloat-abi=hard             -D_FILE_OFFSET_BITS=64             native/sgbpack_native_n1.c             -o dist/sgbpack-native             -Wl,-rpath-link,"$SYSROOT/lib/arm-linux-gnueabihf"             "$SYSROOT/lib/arm-linux-gnueabihf/libdl.so.2"
+          {
+            echo "=== FRONTEND file ==="
+            file "$GITHUB_WORKSPACE/dist/sgbpack-native-n2"
+            echo "=== FRONTEND ELF ==="
+            "$READELF" -h "$GITHUB_WORKSPACE/dist/sgbpack-native-n2"
+            echo "=== FRONTEND dynamic ==="
+            "$READELF" -d "$GITHUB_WORKSPACE/dist/sgbpack-native-n2"
+            echo "=== FRONTEND versions ==="
+            "$READELF" -V "$GITHUB_WORKSPACE/dist/sgbpack-native-n2"
+          } | tee "$GITHUB_WORKSPACE/dist/FRONTEND-VERIFY.txt"
 
-          file dist/sgbpack-native
-          "$READELF" -h dist/sgbpack-native | tee dist/ELF_HEADER.txt
-          "$READELF" -d dist/sgbpack-native | tee dist/DYNAMIC.txt
-          "$READELF" -V dist/sgbpack-native | tee dist/VERSIONS.txt
+          file "$GITHUB_WORKSPACE/dist/sgbpack-native-n2" | grep -q "ELF 32-bit"
+          "$READELF" -h "$GITHUB_WORKSPACE/dist/sgbpack-native-n2" | grep -q "Machine:.*ARM"
+          "$READELF" -h "$GITHUB_WORKSPACE/dist/sgbpack-native-n2" | grep -q "hard-float ABI"
 
-          file dist/sgbpack-native | grep -q "ELF 32-bit"
-          "$READELF" -h dist/sgbpack-native | grep -q "Machine:.*ARM"
-          "$READELF" -h dist/sgbpack-native | grep -q "hard-float ABI"
-
-          if "$READELF" -V dist/sgbpack-native | grep -Eq 'GLIBC_2\.(2[4-9]|[3-9][0-9])'; then
-            echo "ERROR: sgbpack-native requires GLIBC newer than 2.23"
-            "$READELF" -V dist/sgbpack-native | grep -E 'GLIBC_2\.'
+          if "$READELF" -V "$GITHUB_WORKSPACE/dist/sgbpack-native-n2" | grep -Eq 'GLIBC_2\.(2[4-9]|[3-9][0-9])'; then
+            echo "ERROR: frontend requires GLIBC newer than 2.23"
             exit 1
           fi
 
-          "$STRIP" --strip-unneeded dist/sgbpack-native
-          sha256sum dist/sgbpack-native | tee dist/SHA256SUMS.txt
-          echo "NES Mini ABI/GLIBC check: OK"
+          "$STRIP" --strip-unneeded "$GITHUB_WORKSPACE/dist/sgbpack-native-n2"
+          sha256sum "$GITHUB_WORKSPACE/dist/sgbpack-native-n2" > "$GITHUB_WORKSPACE/dist/SHA256-frontend.txt"
 
-      - name: Build HMOD
+      - name: Build N2 HMOD
         run: |
           set -e
           rm -rf hmod-stage
-          mkdir -p hmod-stage/bin
-          cp dist/sgbpack-native hmod-stage/bin/sgbpack-native
+          mkdir -p hmod-stage/bin hmod-stage/usr/lib/ikcore
+
+          cp dist/sgbpack-native-n2 hmod-stage/usr/lib/ikcore/sgbpack-native-n2
+          cp dist/ikcore_sgbpack_libretro.so hmod-stage/usr/lib/ikcore/ikcore_sgbpack_libretro.so
+          chmod 755 hmod-stage/usr/lib/ikcore/sgbpack-native-n2
+
+          cat > hmod-stage/bin/sgbpack-native <<'EOF'
+          #!/bin/sh
+          exec /usr/lib/ikcore/sgbpack-native-n2 "$@"
+          EOF
           chmod 755 hmod-stage/bin/sgbpack-native
 
           cat > hmod-stage/install <<'EOF'
           #!/bin/sh
+          mkdir -p "$rootfs/usr/lib/ikcore"
           copy "./bin/sgbpack-native" "$rootfs/bin/sgbpack-native"
+          copy "./usr/lib/ikcore/sgbpack-native-n2" "$rootfs/usr/lib/ikcore/sgbpack-native-n2"
+          copy "./usr/lib/ikcore/ikcore_sgbpack_libretro.so" "$rootfs/usr/lib/ikcore/ikcore_sgbpack_libretro.so"
           chmod +x "$rootfs/bin/sgbpack-native"
+          chmod +x "$rootfs/usr/lib/ikcore/sgbpack-native-n2"
           EOF
 
           cat > hmod-stage/uninstall <<'EOF'
           #!/bin/sh
           rm -f "$rootfs/bin/sgbpack-native"
+          rm -f "$rootfs/usr/lib/ikcore/sgbpack-native-n2"
+          rm -f "$rootfs/usr/lib/ikcore/ikcore_sgbpack_libretro.so"
+          rmdir "$rootfs/usr/lib/ikcore" 2>/dev/null || true
           EOF
 
           chmod 755 hmod-stage/install hmod-stage/uninstall
-          tar -C hmod-stage -czf IkCore-Native-N1_7-EGL-GLIBC223.hmod .
-          sha256sum IkCore-Native-N1_7-EGL-GLIBC223.hmod > IkCore-Native-N1_7-EGL-GLIBC223.hmod.sha256
+          tar -C hmod-stage -czf IkCore-Native-N2-SGB-EGL.hmod .
+          sha256sum IkCore-Native-N2-SGB-EGL.hmod > IkCore-Native-N2-SGB-EGL.hmod.sha256
 
       - name: Package diagnostics
         run: |
-          cp native/README.md dist/README-NATIVE.txt
-          tar -C dist -czf IkCore-NESMini-Native-N1_7-EGL-GLIBC223.tar.gz .
+          cp ikcore-project/native_n2/README.md dist/README-N2.txt
+          tar -C dist -czf IkCore-Native-N2-diagnostics.tar.gz .
 
-      - name: Upload N1.7 HMOD
+      - name: Upload N2 HMOD
         uses: actions/upload-artifact@v4
         with:
-          name: IkCore-Native-N1_7-EGL-GLIBC223-HMOD
+          name: IkCore-Native-N2-SGB-EGL-HMOD
           path: |
-            IkCore-Native-N1_7-EGL-GLIBC223.hmod
-            IkCore-Native-N1_7-EGL-GLIBC223.hmod.sha256
-            IkCore-NESMini-Native-N1_7-EGL-GLIBC223.tar.gz
+            IkCore-Native-N2-SGB-EGL.hmod
+            IkCore-Native-N2-SGB-EGL.hmod.sha256
+            IkCore-Native-N2-diagnostics.tar.gz
           retention-days: 30
           if-no-files-found: error
