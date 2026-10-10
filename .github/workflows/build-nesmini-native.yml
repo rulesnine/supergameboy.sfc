@@ -13,25 +13,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build ARMv7 against Ubuntu Xenial glibc 2.23
+      - name: Fetch Linaro ARMv7 toolchain + glibc 2.23 sysroot
         run: |
-          mkdir -p dist
+          set -eux
+          mkdir -p toolchain dist
+          cd toolchain
 
-          docker run --rm             -v "$PWD:/work"             -w /work             ubuntu:16.04             bash -lc '
-              set -eux
-              sed -i "s|http://archive.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g" /etc/apt/sources.list
-              sed -i "s|http://security.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g" /etc/apt/sources.list
-              apt-get update
-              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends                 gcc-arm-linux-gnueabihf                 binutils-arm-linux-gnueabihf                 libc6-dev-armhf-cross                 ca-certificates                 file
+          curl -fL --retry 3 -o gcc.tar.xz             https://releases.linaro.org/components/toolchain/binaries/6.3-2017.05/arm-linux-gnueabihf/gcc-linaro-6.3.1-2017.05-x86_64_arm-linux-gnueabihf.tar.xz
 
-              COMMON="-O3 -pipe -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -D_FILE_OFFSET_BITS=64"
-              arm-linux-gnueabihf-gcc $COMMON native/sgbpack_native_n1.c -o dist/sgbpack-native -ldl
-              arm-linux-gnueabihf-strip dist/sgbpack-native
-              file dist/sgbpack-native
-              arm-linux-gnueabihf-readelf -d dist/sgbpack-native > dist/DYNAMIC.txt
-              arm-linux-gnueabihf-readelf --version-info dist/sgbpack-native > dist/VERSIONS.txt
-            '
+          curl -fL --retry 3 -o sysroot.tar.xz             https://releases.linaro.org/components/toolchain/binaries/6.3-2017.05/arm-linux-gnueabihf/sysroot-glibc-linaro-2.23-2017.05-arm-linux-gnueabihf.tar.xz
 
+          tar -xf gcc.tar.xz
+          tar -xf sysroot.tar.xz
+
+      - name: Build ARMv7 for NES Mini glibc 2.23
+        run: |
+          set -eux
+
+          TC="$PWD/toolchain/gcc-linaro-6.3.1-2017.05-x86_64_arm-linux-gnueabihf"
+          SYSROOT="$PWD/toolchain/sysroot-glibc-linaro-2.23-2017.05-arm-linux-gnueabihf"
+          CC="$TC/bin/arm-linux-gnueabihf-gcc"
+          STRIP="$TC/bin/arm-linux-gnueabihf-strip"
+          READELF="$TC/bin/arm-linux-gnueabihf-readelf"
+
+          COMMON="-O3 -pipe -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -D_FILE_OFFSET_BITS=64 --sysroot=$SYSROOT"
+
+          "$CC" $COMMON native/sgbpack_native_n1.c -o dist/sgbpack-native -ldl
+          "$STRIP" dist/sgbpack-native
+
+          file dist/sgbpack-native
+          "$READELF" -l dist/sgbpack-native > dist/PROGRAM_HEADERS.txt
+          "$READELF" -d dist/sgbpack-native > dist/DYNAMIC.txt
+          "$READELF" --version-info dist/sgbpack-native > dist/VERSIONS.txt
           cat dist/VERSIONS.txt
 
           python3 - <<'PY'
@@ -41,15 +54,16 @@ jobs:
           print("GLIBC requeridas:", versions)
           bad = [v for v in versions if v > (2,23)]
           if bad:
-              print("ERROR: el binario aun requiere GLIBC > 2.23:", bad)
+              print("ERROR: binario incompatible con NES Mini; requiere:", bad)
               sys.exit(1)
-          print("ABI NES Mini: OK (GLIBC <= 2.23)")
+          print("ABI NES Mini: OK, no requiere GLIBC > 2.23")
           PY
 
           sha256sum dist/sgbpack-native | tee dist/SHA256SUMS.txt
 
       - name: Build HMOD
         run: |
+          set -eux
           rm -rf hmod-stage
           mkdir -p hmod-stage/bin
           cp dist/sgbpack-native hmod-stage/bin/sgbpack-native
@@ -67,19 +81,19 @@ jobs:
           EOF
 
           chmod 755 hmod-stage/install hmod-stage/uninstall
-          tar -C hmod-stage -czf IkCore-Native-N1_7-EGL-XENIAL.hmod .
-          sha256sum IkCore-Native-N1_7-EGL-XENIAL.hmod > IkCore-Native-N1_7-EGL-XENIAL.hmod.sha256
+          tar -C hmod-stage -czf IkCore-Native-N1_7-EGL-GLIBC223.hmod .
+          sha256sum IkCore-Native-N1_7-EGL-GLIBC223.hmod > IkCore-Native-N1_7-EGL-GLIBC223.hmod.sha256
 
       - name: Package diagnostics
         run: |
           cp native/README.md dist/README-NATIVE.txt
-          tar -C dist -czf IkCore-NESMini-Native-N1_7-EGL-XENIAL.tar.gz .
+          tar -C dist -czf IkCore-NESMini-Native-N1_7-EGL-GLIBC223.tar.gz .
 
       - uses: actions/upload-artifact@v4
         with:
-          name: IkCore-Native-N1_7-EGL-XENIAL-HMOD
+          name: IkCore-Native-N1_7-EGL-GLIBC223-HMOD
           path: |
-            IkCore-Native-N1_7-EGL-XENIAL.hmod
-            IkCore-Native-N1_7-EGL-XENIAL.hmod.sha256
-            IkCore-NESMini-Native-N1_7-EGL-XENIAL.tar.gz
+            IkCore-Native-N1_7-EGL-GLIBC223.hmod
+            IkCore-Native-N1_7-EGL-GLIBC223.hmod.sha256
+            IkCore-NESMini-Native-N1_7-EGL-GLIBC223.tar.gz
           if-no-files-found: error
