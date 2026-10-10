@@ -2952,7 +2952,6 @@ main_new = """#ifdef IKCORE_SGB_HYBRID_AUDIO
 \t\tSettings.SuperGameBoy = TRUE;
 \t\tSettings.PAL = FALSE;
 \t\tSettings.FrameTime = Settings.FrameTimeNTSC;
-\t\tROMFramesPerSecond = 60;
 \t\tS9xMessage(S9X_INFO, S9X_ROM_INFO,
 \t\t           "IKCORE PERF2 switch: direct GB/SGB + live SNES SPC/DSP.");
 \t}
