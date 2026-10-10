@@ -1,18 +1,18 @@
 /*
- * Ik Core Native PERF1 — direct SGB performance engine + improved audio + border fade
+ * Ik Core Native PERF2 — direct SGB + retained SNES SPC/DSP audio
  *
  * Hardware target: NES Classic / NES Mini (ARMv7 Cortex-A7, Mali-400 MP)
  *
- * PERF1 / physical validation 4-of-5 goals:
+ * PERF2 / physical validation 5-of-5 goals:
  * - keep the validated N1.7 Clover EGL lifecycle
  * - dlopen the Ik Core / SuperSnes9x SGBPACK libretro core directly
  * - load the SGBPACK1 test image without RetroArch
  * - render the core's real video through GLES2
  * - keep the complete SNES-side Super Game Boy BIOS path with real audio
- * - use Ik Core direct SGB command engine with event-driven DMG rendering
+ * - keep PERF1 event-driven gameplay and 60 FPS target
  * - map the Nintendo Clovercon NES pad to libretro joypad input
  *
- * - keep full 256x224 SGB composite output and test real gameplay\n * - allow a clean return with SELECT+START held for 1.5 seconds\n *\n * - improved buffered ALSA audio; optional GPU-assisted SGB border fade\n *\n * This is the performance architecture, not mGBA and not the full SNES BIOS path.
+ * - keep full 256x224 SGB composite output and test real gameplay\n * - allow a clean return with SELECT+START held for 1.5 seconds\n *\n * - retain real SGB-initialized SNES SPC/DSP audio; atomic border swaps, no fade\n *\n * Real BIOS is used only for startup/APU initialization; gameplay is direct Ik Core.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -36,7 +36,7 @@
 #define IKCORE_CORE_PATH "/usr/lib/ikcore/ikcore_sgbpack_libretro.so"
 #define IKCORE_STATE_DIR "/var/lib/hakchi/sgb-native-test"
 #define IKCORE_DEFAULT_PACK IKCORE_STATE_DIR "/KOF96_SGBPACK_v1_REUPLOAD.sfc"
-#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-perf1.log"
+#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-perf2.log"
 #define IKCORE_TEST_SECONDS 120.0
 #define IKCORE_EXIT_HOLD_SECONDS 1.5
 
@@ -1232,10 +1232,8 @@ static void video_cb(const void *data, unsigned width, unsigned height, size_t p
             g_video_seconds += now_s() - t0;
             return;
         }
-        {
-            const uint16_t *shown = apply_border_fade((const uint16_t *)packed, width, height);
-            upload_rgb565_direct(shown, width, height);
-        }
+        g_border_fade = 1.0f;
+        upload_rgb565_direct(packed, width, height);
     } else {
         convert_frame_rgba(data, width, height, pitch);
         if (!g_rgba) {
@@ -1343,10 +1341,10 @@ int main(int argc, char **argv)
 
     log_open();
     pack_path = select_pack_path(argc, argv);
-    log_printf("Ik Core Native PERF1 - direct SGB performance engine\n");
+    log_printf("Ik Core Native PERF2 - direct SGB + retained SNES audio\n");
     log_printf("audio       : ACTIVADO; salida ALSA real\n");
     log_printf("core        : %s\n", IKCORE_CORE_PATH);
-    log_printf("core mode   : SGB directo propio + PPU por eventos + audio buffered + fade marco\n");
+    log_printf("core mode   : BIOS boot -> SGB directo + SPC/DSP SNES retenido + borde atomico\n");
     log_printf("SGBPACK     : %s\n", pack_path);
 
     if (access(pack_path, R_OK) != 0) {
@@ -1412,8 +1410,8 @@ int main(int argc, char **argv)
             log_printf("ALSA        : NO DISPONIBLE; el core sigue generando audio para medirlo\n");
     }
 
-    log_printf("video path  : RGB565 Mali + fade de borde SGB 12 frames (solo al cambiar marco)\n");
-    log_printf("audio path  : ring 8192 frames, prefill 1024, ALSA nonblocking\n");
+    log_printf("video path  : RGB565 Mali; borde SGB atomico, fade visual desactivado\n");
+    log_printf("audio path  : GB APU exacto + SNES SPC/DSP retenido, ring 8192/prefill 1024\n");
     log_printf("play test   : %.0f s a %.3f FPS objetivo\n", IKCORE_TEST_SECONDS, target_fps);
     log_printf("salir       : mantener SELECT+START %.1f s\n", IKCORE_EXIT_HOLD_SECONDS);
 
@@ -1485,7 +1483,7 @@ cleanup:
 
     destroy_egl();
 
-    log_printf("\nFINAL PERF1\n");
+    log_printf("\nFINAL PERF2\n");
     log_printf("runs        : %lu\n", run_frames);
     log_printf("video frames: %lu\n", g_video_frames);
     log_printf("runtime     : %.2f s\n", test_elapsed);
@@ -1513,7 +1511,7 @@ cleanup:
     log_printf("ALSA recover: %lu\n", g_audio_recoveries);
     log_printf("ALSA close  : cerrado limpiamente\n");
     log_printf("EGL         : liberado correctamente\n");
-    log_printf("resultado   : %s\n", success ? "VIDEO SGB OK" : "FALLO; revisar ikcore-perf1.log");
+    log_printf("resultado   : %s\n", success ? "VIDEO SGB OK" : "FALLO; revisar ikcore-perf2.log");
     log_printf("log         : %s\n", IKCORE_LOG_PATH);
 
     if (g_log) {
@@ -1521,6 +1519,6 @@ cleanup:
         g_log = NULL;
     }
 
-    /* Always return cleanly to Clover for controlled PERF1 exits/errors. */
+    /* Always return cleanly to Clover for controlled PERF2 exits/errors. */
     return 0;
 }
