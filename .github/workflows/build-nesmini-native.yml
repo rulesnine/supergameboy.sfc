@@ -1,4 +1,4 @@
-name: Build NES Mini PERF2 Audio Audit (NO DEVICE TEST)
+name: Build NES Mini PERF2 Parallel SPC Candidate (NO DEVICE TEST)
 
 on:
   workflow_dispatch:
@@ -98,7 +98,7 @@ jobs:
           git diff --check
           grep -q "Ik Core loaded SGBPACK1" memmap.cpp
 
-      - name: Build PERF2 audio-audit direct SGB core for ARMv7
+      - name: Build PERF2 parallel SPC direct SGB core for ARMv7
         working-directory: supersnes9x/libretro
         run: |
           set -e
@@ -106,15 +106,15 @@ jobs:
           make -j2 \
             platform=classic_armv7_a7 \
             CC="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc" \
-            CXX="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++ -fno-threadsafe-statics -fno-semantic-interposition" \
+            CXX="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++ -fno-threadsafe-statics -fno-semantic-interposition -pthread" \
             AR="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar" \
             STRIP="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-strip" \
             HAVE_UNZIP=0 \
-            CPPFLAGS="-DSGBPACK_LITE -DIKCORE_GB_FAST_IDLE -DIKCORE_PPU_IDLE_FAST -DIKCORE_MBC5_FAST -DIKCORE_FIXED_ACID_KNOBS -DIKCORE_SGB_PERF_PPU -DIKCORE_SGB_HYBRID_AUDIO -DIKCORE_SGB_LAZY_APU" \
-            LDFLAGS="-flto=4 -static-libgcc -static-libstdc++" \
+            CPPFLAGS="-DSGBPACK_LITE -DIKCORE_GB_FAST_IDLE -DIKCORE_PPU_IDLE_FAST -DIKCORE_MBC5_FAST -DIKCORE_FIXED_ACID_KNOBS -DIKCORE_SGB_PERF_PPU -DIKCORE_SGB_HYBRID_AUDIO -DIKCORE_SGB_LAZY_APU -DIKCORE_SGB_PERF_AUDIO_THREADED" \
+            LDFLAGS="-flto=4 -pthread -static-libgcc -static-libstdc++" \
             LIBS="$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6"
 
-      - name: Verify and stage PERF2 audio-audit SGB core
+      - name: Verify and stage PERF2 parallel SPC SGB core
         working-directory: supersnes9x/libretro
         run: |
           set -e
@@ -144,12 +144,12 @@ jobs:
             exit 1
           fi
 
-          echo "CORE MODE: EXPERIMENTAL - SPC fixed pitch + lazy GB APU + isolated SPC profiling; NOT physical validated" >> "$GITHUB_WORKSPACE/dist/CORE-VERIFY.txt"
+          echo "CORE MODE: UNVERIFIED - separate SPC audio worker + queued SGB commands; stable graphics and fade untouched" >> "$GITHUB_WORKSPACE/dist/CORE-VERIFY.txt"
           cp "$CORE" "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so"
           "$STRIP" --strip-unneeded "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so"
           sha256sum "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so" > "$GITHUB_WORKSPACE/dist/SHA256-core.txt"
 
-      - name: Build PERF2 EGL frontend
+      - name: Build PERF2 parallel SPC EGL frontend
         run: |
           set -e
           CC="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc"
@@ -192,7 +192,7 @@ jobs:
           "$STRIP" --strip-unneeded "$GITHUB_WORKSPACE/dist/sgbpack-native-n2"
           sha256sum "$GITHUB_WORKSPACE/dist/sgbpack-native-n2" > "$GITHUB_WORKSPACE/dist/SHA256-frontend.txt"
 
-      - name: Package PERF2 audio-audit HMOD (not validated)
+      - name: Package PERF2 parallel SPC HMOD (not validated)
         run: |
           set -e
           rm -rf hmod-stage
@@ -235,10 +235,10 @@ jobs:
           cp ikcore-project/native_n2/README.md dist/README-PERF2.txt
           tar -C dist -czf IkCore-Native-PERF2-diagnostics.tar.gz .
 
-      - name: Upload PERF2 audio-audit artifact (not validated)
+      - name: Upload PERF2 parallel SPC artifact (not validated)
         uses: actions/upload-artifact@v4
         with:
-          name: IkCore-Native-PERF2-AUDIO-AUDIT-HMOD
+          name: IkCore-Native-PERF2-PARALLEL-SPC-CANDIDATE-HMOD
           path: |
             IkCore-Native-PERF2-AUDIO-AUDIT.hmod
             IkCore-Native-PERF2-AUDIO-AUDIT.hmod.sha256
