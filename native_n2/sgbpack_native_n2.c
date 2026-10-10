@@ -36,7 +36,7 @@
 #define IKCORE_CORE_PATH "/usr/lib/ikcore/ikcore_sgbpack_libretro.so"
 #define IKCORE_STATE_DIR "/var/lib/hakchi/sgb-native-test"
 #define IKCORE_DEFAULT_PACK IKCORE_STATE_DIR "/KOF96_SGBPACK_v1_REUPLOAD.sfc"
-#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-perf2-parallel.log"
+#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-perf2-ratelock.log"
 #define IKCORE_TEST_SECONDS 120.0
 #define IKCORE_EXIT_HOLD_SECONDS 1.5
 
@@ -1343,7 +1343,7 @@ int main(int argc, char **argv)
 
     log_open();
     pack_path = select_pack_path(argc, argv);
-    log_printf("Ik Core Native PERF2 PARALLEL - SGB + retained SNES audio\n");
+    log_printf("Ik Core PERF2 RATE LOCK - parallel SGB + retained SNES audio\n");
     log_printf("audio       : ACTIVADO; salida ALSA real\n");
     log_printf("core        : %s\n", IKCORE_CORE_PATH);
     log_printf("core mode   : BIOS boot -> SGB directo + SPC/DSP SNES retenido + borde atomico\n");
@@ -1413,7 +1413,7 @@ int main(int argc, char **argv)
     }
 
     log_printf("video path  : RGB565 Mali; borde SGB atomico, fade visual desactivado\n");
-    log_printf("audio path  : GB APU exacto + SNES SPC/DSP retenido, ring 8192/prefill 1024\n");
+    log_printf("audio path  : GB APU PCM rate-lock 32040 Hz + SNES SPC/DSP paralelo, ring 8192/prefill 1024\n");
     log_printf("play test   : %.0f s a %.3f FPS objetivo\n", IKCORE_TEST_SECONDS, target_fps);
     log_printf("salir       : mantener SELECT+START %.1f s\n", IKCORE_EXIT_HOLD_SECONDS);
 
