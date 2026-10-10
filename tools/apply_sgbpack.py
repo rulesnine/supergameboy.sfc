@@ -1446,3 +1446,171 @@ gk = replace_once(gk, knob_anchor, knob_new, "gb_knob.h fixed-default fast path"
 GBKNOB.write_text(gk, encoding="utf-8")
 
 print("IK Core N2.10 fixed default timing knobs applied.")
+
+
+# ---- N3.1 full-BIOS GB sync hot path
+# Full SGB mode synchronizes GB time after every 65816 opcode and before ICD2
+# accesses. Most of those tiny deltas are smaller than the SM83 instruction
+# overshoot already carried in run_target. The generic RunCycles() still did
+# all per-call setup and tail checks even when no GB instruction could run.
+# Keep the identical persistent target and CPU-step ordering, but return early
+# on those zero-work sync slices when no deferred side effect is pending.
+
+SGBH = ROOT / "supersnes9x" / "sgb" / "sgb.h"
+sh = SGBH.read_text(encoding="utf-8-sig")
+decl_anchor = """\t// Advance by N T-cycles. Used when snes9x drives the master clock directly.
+\tvoid RunCycles(int32_t tcycles);
+"""
+decl_new = """\t// Advance by N T-cycles. Used when snes9x drives the master clock directly.
+\tvoid RunCycles(int32_t tcycles);
+#ifdef IKCORE_SGB_FULL_FASTSYNC
+\t// Full-SGB BIOS hot path. Semantics match RunCycles' persistent target,
+\t// but zero-work opcode sync slices skip invariant setup/tail work.
+\tvoid RunSyncCycles(int32_t tcycles);
+#endif
+"""
+sh = replace_once(sh, decl_anchor, decl_new, "sgb.h N3.1 RunSyncCycles declaration")
+SGBH.write_text(sh, encoding="utf-8")
+
+SGBCPP = ROOT / "supersnes9x" / "sgb" / "sgb.cpp"
+sc = SGBCPP.read_text(encoding="utf-8-sig")
+
+insert_anchor = """const FrameBuffer &Emulator::GetFrameBuffer() const { return impl_->fb; }
+"""
+fast_body = r'''
+#ifdef IKCORE_SGB_FULL_FASTSYNC
+void Emulator::RunSyncCycles(int32_t tcycles)
+{
+	if (!impl_->has_rom || tcycles <= 0) return;
+
+	// Preserve RunCycles' absolute-credit semantics exactly. A prior SM83
+	// instruction may already have overshot this target by several T-cycles.
+	const int64_t target_t = impl_->run_target + tcycles;
+	impl_->run_target = target_t;
+
+	// This is the common full-BIOS case: SNES advanced a tiny slice but GB is
+	// already caught up because of instruction overshoot. The old path still
+	// recomputed mode/APU state and tested all tails for every such call.
+	const bool no_gb_step = impl_->ppu.t_cycles >= target_t;
+	const bool pending_mmm01 = impl_->cart.mbc.mmm01_just_locked;
+	const bool pending_border =
+		impl_->border_capture.stage != Impl::BorderCapture::Idle &&
+		impl_->ppu.frame_ready;
+	const bool needs_sgbc_tail = impl_->sgbc && impl_->ppu.cgb;
+	if (no_gb_step && !pending_mmm01 && !pending_border && !needs_sgbc_tail)
+		return;
+
+	// Same setup as RunCycles, executed only when GB work (or a deferred tail)
+	// actually exists.
+	impl_->apu.suppress_nrx2_glitch = impl_->SuppressNrxGlitches();
+	impl_->ppu.cgb = impl_->CgbActive();
+	impl_->ppu.dmg_compat = impl_->ppu.cgb && impl_->dmg_compat_cgb &&
+		(!impl_->mem.boot_rom_enabled || (impl_->mem.key0 & 0x04));
+	impl_->ppu.hold_present_on_enable = !impl_->BiosMode() &&
+		(impl_->cgb_mode || impl_->run_mode == RunMode::DMG);
+
+	if (impl_->cart.mbc.mmm01_just_locked)
+	{
+		impl_->cart.mbc.mmm01_just_locked = false;
+		uint8_t pal01[16], pal23[16], attr_blk[16];
+		BuildSgbDefaultPalettePackets(pal01, pal23);
+		BuildResetAttrBlkPacket(attr_blk);
+		if (impl_->boot_rom_loaded)
+		{
+			IcdPushQueue(impl_->icd2, pal01);
+			IcdPushQueue(impl_->icd2, pal23);
+			IcdPushQueue(impl_->icd2, attr_blk);
+		}
+		else
+		{
+			OnSgbCommandInternal(0x00, &pal01[1],    14);
+			OnSgbCommandInternal(0x01, &pal23[1],    14);
+			OnSgbCommandInternal(0x04, &attr_blk[1], 14);
+		}
+	}
+
+	while (impl_->ppu.t_cycles < target_t)
+	{
+		const bool was_boot = impl_->mem.boot_rom_enabled;
+		impl_->cpu.Step(impl_->mem);
+
+		if (was_boot && !impl_->mem.boot_rom_enabled &&
+		    !impl_->boot_handoff_captured)
+		{
+			if (impl_->sgbc && impl_->cgb_mode)
+				impl_->SgbcHandoff();
+			impl_->boot_handoff_captured = true;
+			impl_->boot_handoff_regs     = impl_->cpu.State().r;
+		}
+	}
+
+	// Preserve the same post-step tails as generic RunCycles. These are rare
+	// in normal SGB1 gameplay but correctness matters for SGB borders/SGBC.
+	if (impl_->sgbc && impl_->ppu.cgb)
+	{
+		const uint8_t ly = impl_->ppu.ly;
+		if (ly < GB_SCREEN_HEIGHT && impl_->ppu.bgp == 0 &&
+		    impl_->ppu.obp0 == 0 && impl_->ppu.obp1 == 0)
+			impl_->cgb_blank_run = true;
+		if (ly >= GB_SCREEN_HEIGHT && impl_->cgb_overlay_ly < GB_SCREEN_HEIGHT)
+		{
+			std::memcpy(impl_->cgb_overlay_fb, impl_->ppu.color_fb,
+			            sizeof impl_->cgb_overlay_fb);
+			impl_->cgb_overlay_valid = true;
+			impl_->cgb_overlay_bgp   = impl_->ppu.bgp;
+			impl_->cgb_overlay_lcdc  = impl_->ppu.lcdc;
+			impl_->cgb_overlay_obp0  = impl_->ppu.obp0;
+			impl_->cgb_overlay_obp1  = impl_->ppu.obp1;
+			impl_->cgb_overlay_blank_any = impl_->cgb_blank_run;
+			impl_->cgb_blank_run = false;
+		}
+		impl_->cgb_overlay_ly = ly;
+	}
+
+	if (impl_->border_capture.stage != Impl::BorderCapture::Idle &&
+	    impl_->ppu.frame_ready)
+	{
+		if (impl_->border_capture.skip)
+		{
+			--impl_->border_capture.skip;
+			impl_->ppu.frame_ready = false;
+			return;
+		}
+		uint8_t decoded[4096];
+		DecodeBorderCapture((impl_->sgbc && impl_->ppu.cgb) ? impl_->sgbc_trn.Frame()
+		                                                    : impl_->ppu.raw_framebuffer, decoded);
+		const uint8_t cmd =
+			(impl_->border_capture.stage == Impl::BorderCapture::ChrTrn)
+				? static_cast<uint8_t>(0x13)
+				: static_cast<uint8_t>(0x14);
+		++g_sgb_dbg.cap_fired;
+		SgbHandleCommand(impl_->sgb_state, cmd,
+		                 impl_->border_capture.pkt, 16,
+		                 decoded, impl_->ppu.framebuffer);
+		++impl_->border_plane;
+		if (cmd == 0x14) ++impl_->border_pct;
+		impl_->border_capture.stage = Impl::BorderCapture::Idle;
+	}
+}
+#endif
+
+'''
+sc = replace_once(sc, insert_anchor, fast_body + insert_anchor,
+                  "sgb.cpp N3.1 RunSyncCycles body")
+
+old1 = """\t\t\tSGB::Instance().RunCycles(gb_cycles);
+"""
+new1 = """#ifdef IKCORE_SGB_FULL_FASTSYNC
+\t\t\tSGB::Instance().RunSyncCycles(gb_cycles);
+#else
+\t\t\tSGB::Instance().RunCycles(gb_cycles);
+#endif
+"""
+# There are two instances (SGB1 and SGB2/DMG); replace both deliberately.
+count = sc.count(old1)
+if count != 2:
+    raise SystemExit(f"sgb.cpp N3.1 TickSnes callsites: expected 2, found {count}")
+sc = sc.replace(old1, new1)
+
+SGBCPP.write_text(sc, encoding="utf-8")
+print("IK Core N3.1 full-BIOS fast sync path applied.")
