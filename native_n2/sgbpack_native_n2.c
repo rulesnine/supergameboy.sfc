@@ -913,9 +913,44 @@ static void close_core(void)
     g_libcore = NULL;
 }
 
+static int has_rom_extension(const char *path)
+{
+    const char *dot;
+    if (!path) return 0;
+    dot = strrchr(path, '.');
+    if (!dot) return 0;
+    return strcasecmp(dot, ".sfc") == 0 ||
+           strcasecmp(dot, ".smc") == 0;
+}
+
+static const char *select_pack_path(int argc, char **argv)
+{
+    int i;
+
+    /*
+     * Clover/Hakchi appends launcher flags such as --save-on-quit to Exec.
+     * Those are frontend options, not ROM paths. N2 previously treated argv[1]
+     * as the SGBPACK unconditionally, so Clover launch tried to open the literal
+     * filename "--save-on-quit" and immediately returned to the menu.
+     *
+     * Only accept an explicit ROM-looking positional argument. With no such
+     * argument, use the installed/default SGBPACK test image.
+     */
+    for (i = 1; i < argc; i++) {
+        if (!argv[i] || !argv[i][0]) continue;
+        if (argv[i][0] == '-') {
+            log_printf("launcher arg: ignorado %s\n", argv[i]);
+            continue;
+        }
+        if (has_rom_extension(argv[i])) return argv[i];
+    }
+
+    return IKCORE_DEFAULT_PACK;
+}
+
 int main(int argc, char **argv)
 {
-    const char *pack_path = (argc > 1 && argv[1] && argv[1][0]) ? argv[1] : IKCORE_DEFAULT_PACK;
+    const char *pack_path;
     struct retro_system_info sysinfo;
     struct retro_system_av_info avinfo;
     struct retro_game_info game;
@@ -926,6 +961,7 @@ int main(int argc, char **argv)
     int success = 0;
 
     log_open();
+    pack_path = select_pack_path(argc, argv);
     log_printf("Ik Core Native N2.1 - optimized SGB engine / EGL benchmark\n");
     log_printf("audio       : DESACTIVADO; ALSA no se abre\n");
     log_printf("core        : %s\n", IKCORE_CORE_PATH);
