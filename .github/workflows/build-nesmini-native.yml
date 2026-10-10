@@ -1,4 +1,4 @@
-name: Build NES Mini PERF2 Clock Stability Candidate (NO DEVICE TEST)
+name: Build NES Mini PERF2 ALSA XRUN Candidate (NO DEVICE TEST)
 
 on:
   workflow_dispatch:
@@ -163,6 +163,7 @@ jobs:
             -march=armv7-a -mtune=cortex-a7 \
             -mfpu=neon-vfpv4 -mfloat-abi=hard \
             -D_FILE_OFFSET_BITS=64 \
+            -DIKCORE_BUILD_NUMBER=\\"${{ github.run_number }}\\" -DIKCORE_BUILD_SHA=\\"${{ github.sha }}\\" \
             -I"$GITHUB_WORKSPACE/supersnes9x/libretro" \
             "$GITHUB_WORKSPACE/ikcore-project/native_n2/sgbpack_native_n2.c" \
             -o "$GITHUB_WORKSPACE/dist/sgbpack-native-n2" \
@@ -227,8 +228,8 @@ jobs:
           EOF
 
           chmod 755 hmod-stage/install hmod-stage/uninstall
-          tar -C hmod-stage -czf IkCore-Native-PERF2-AUDIO-AUDIT.hmod .
-          sha256sum IkCore-Native-PERF2-AUDIO-AUDIT.hmod > IkCore-Native-PERF2-AUDIO-AUDIT.hmod.sha256
+          tar -C hmod-stage -czf "IkCore-Native-PERF2-AUDIO-XRUN-${{ github.run_number }}.hmod" .
+          sha256sum "IkCore-Native-PERF2-AUDIO-XRUN-${{ github.run_number }}.hmod" > "IkCore-Native-PERF2-AUDIO-XRUN-${{ github.run_number }}.hmod.sha256"
 
       - name: Package diagnostics
         run: |
@@ -238,10 +239,10 @@ jobs:
       - name: Upload PERF2 clock stability artifact (not validated)
         uses: actions/upload-artifact@v4
         with:
-          name: IkCore-Native-PERF2-CLOCK-STABILITY-CANDIDATE-HMOD
+          name: IkCore-Native-PERF2-AUDIO-XRUN-${{ github.run_number }}-HMOD
           path: |
-            IkCore-Native-PERF2-AUDIO-AUDIT.hmod
-            IkCore-Native-PERF2-AUDIO-AUDIT.hmod.sha256
+            IkCore-Native-PERF2-AUDIO-XRUN-${{ github.run_number }}.hmod
+            IkCore-Native-PERF2-AUDIO-XRUN-${{ github.run_number }}.hmod.sha256
             IkCore-Native-PERF2-diagnostics.tar.gz
           retention-days: 30
           if-no-files-found: error
