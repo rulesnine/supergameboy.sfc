@@ -3299,3 +3299,107 @@ new = """\t\tif (DivBit(old, abit))
 gt = replace_once(gt, old, new, "PERF2 APU DIV reset edge sync")
 GBT.write_text(gt, encoding="utf-8")
 print("PERF2 APU DIV EDGE FIX: lazy GB APU flushes before sequencer events.")
+
+
+# ---- PERF2 SOU_TRN CHECK: transactional copy, reject malformed payload -----
+# The data format is the one specified by Pan Docs: chained little-endian
+# [size, destination, data...] records ending with [0, jump_address].
+# The previous PERF2 wrote partial APU RAM data before noticing a malformed
+# record; validate the complete list first so a corrupt transfer never
+# leaves a half-installed sound program in SPC RAM.
+
+APUCPP = ROOT / "supersnes9x" / "apu" / "apu.cpp"
+ac = APUCPP.read_text(encoding="utf-8-sig")
+old = """static uint32 ik_perf_sou_trn_commands = 0;
+"""
+new = """static uint32 ik_perf_sou_trn_commands = 0;
+static uint32 ik_perf_sou_trn_rejected = 0;
+"""
+ac = replace_once(ac, old, new, "PERF2 SOU rejected counter")
+
+old = """    size_t off = 0;
+    while (off + 4 <= 4096)
+    {
+        const uint16 n = (uint16)(src[off] | (src[off + 1] << 8));
+        const uint16 dst = (uint16)(src[off + 2] | (src[off + 3] << 8));
+        off += 4;
+
+        if (n == 0)
+        {
+            // Jump packet: safely restart/enter the uploaded N-SPC program.
+            SNES::smp.regs.pc = dst;
+            SNES::smp.opcode_number = 0;
+            SNES::smp.opcode_cycle = 0;
+            break;
+        }
+
+        if (off + n > 4096) break;
+        size_t copy_n = n;
+        if ((size_t)dst + copy_n > 0x10000)
+            copy_n = 0x10000 - (size_t)dst;
+        if (copy_n)
+            memcpy(SNES::smp.apuram + dst, src + off, copy_n);
+        off += n;
+    }
+    ++ik_perf_sou_trn_commands;
+"""
+new = """    size_t off = 0;
+    bool has_jump = false;
+    uint16 jump_addr = 0;
+
+    // Pass 1: validate the entire transfer BEFORE mutating sound RAM.
+    while (off + 4 <= 4096)
+    {
+        const uint16 n = (uint16)(src[off] | (src[off + 1] << 8));
+        const uint16 dst = (uint16)(src[off + 2] | (src[off + 3] << 8));
+        off += 4;
+        if (n == 0)
+        {
+            has_jump = dst != 0;
+            jump_addr = dst;
+            break;
+        }
+        if (off + n > 4096 || (size_t)dst + n > 65536u)
+        {
+            ++ik_perf_sou_trn_rejected;
+            return;
+        }
+        off += n;
+    }
+    if (!has_jump)
+    {
+        ++ik_perf_sou_trn_rejected;
+        return;
+    }
+
+    // Pass 2: the complete payload is valid, commit all data atomically
+    // between SPC execution frames. Do not restart from a partial upload.
+    off = 0;
+    while (off + 4 <= 4096)
+    {
+        const uint16 n = (uint16)(src[off] | (src[off + 1] << 8));
+        const uint16 dst = (uint16)(src[off + 2] | (src[off + 3] << 8));
+        off += 4;
+        if (n == 0) break;
+        memcpy(SNES::smp.apuram + dst, src + off, n);
+        off += n;
+    }
+    SNES::smp.regs.pc = jump_addr;
+    SNES::smp.opcode_number = 0;
+    SNES::smp.opcode_cycle = 0;
+    ++ik_perf_sou_trn_commands;
+"""
+ac = replace_once(ac, old, new, "PERF2 SOU atomic 4K validation")
+ac = replace_once(ac,
+                 '"SOUND=%u SOU_TRN=%u resampler=%d",',
+                 '"SOUND=%u SOU_TRN=%u rejected=%u spc_avail=%d",',
+                 "PERF2 SOU telemetry format")
+ac = replace_once(ac,
+                 """                 (unsigned)ik_perf_sou_trn_commands,
+                 S9xSpcOutAvailable());""",
+                 """                 (unsigned)ik_perf_sou_trn_commands,
+                 (unsigned)ik_perf_sou_trn_rejected,
+                 S9xSpcOutAvailable());""",
+                 "PERF2 SOU telemetry args")
+APUCPP.write_text(ac, encoding="utf-8")
+print("PERF2 SOU_TRN CHECK: validated atomic sound program transfer.")
