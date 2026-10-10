@@ -3464,3 +3464,378 @@ lc = replace_once(lc,
     "IKCORE SPC NOMINAL DRIFT bounded servo")
 LR.write_text(lc, encoding="utf-8")
 print("IKCORE SPC NOMINAL DRIFT: 0.5% bounded SPC resampler controller.")
+
+
+# ---- IKCORE PARALLEL SPC SAFE DISPATCH (experimental ARM-only opt-in) --------
+# A persistent pthread advances the existing BIOS-initialized SNES SPC700/DSP
+# alongside the GB emulation. Audio commands are NEVER written from the GB
+# thread into SNES::cpu while SPC executes. They are queued in order and
+# delivered by the sound worker at the start of the NEXT frame (<=1 frame
+# command delay). APU RAM uploads are likewise queued. The GB compositor,
+# CHR_TRN/PCT_TRN, input, fade and SNES boot path are completely unchanged.
+#
+# The worker must finish before ProcessSound reads the SPC resampler, so no
+# concurrent read/write of the DSP resampler is possible. Failure to launch
+# a worker falls back to the exact sequential PERF2 audio path.
+# The SPC thread is cleanly joined during APU shutdown/reset to avoid dlclose
+# unloading a live execution context.
+
+APUH = ROOT / "supersnes9x" / "apu" / "apu.h"
+ah = APUH.read_text(encoding="utf-8-sig")
+ah = replace_once(ah,
+    """void  S9xSGBPerfAudioFrame(void);
+void  S9xSGBPerfSoundCommand(const uint8 *data, uint32 len);""",
+    """void  S9xSGBPerfAudioFrame(void);
+#ifdef IKCORE_SGB_PERF_AUDIO_THREADED
+void  S9xSGBPerfAudioBeginFrame(void);
+void  S9xSGBPerfAudioEndFrame(void);
+void  S9xSGBPerfAudioShutdown(void);
+#endif
+void  S9xSGBPerfSoundCommand(const uint8 *data, uint32 len);""",
+    "parallel SPC public interface")
+APUH.write_text(ah, encoding="utf-8")
+
+APUCPP = ROOT / "supersnes9x" / "apu" / "apu.cpp"
+ac = APUCPP.read_text(encoding="utf-8-sig")
+
+ac = replace_once(ac, '#include "apu.h"\n',
+    '#include "apu.h"\n#ifdef IKCORE_SGB_PERF_AUDIO_THREADED\n#include <pthread.h>\n#endif\n',
+    "parallel SPC posix header")
+
+# Declaration of the worker's event-push routine: the implementation is
+# injected below the existing SPC functions, after the legacy full code.
+ac = replace_once(ac,
+    """void S9xSGBPerfSoundCommand(const uint8 *data, uint32 len)
+{
+    if (!ik_perf_audio_active || !data || len < 5) return;
+    SNES::cpu.port_write(1, data[1]);
+    SNES::cpu.port_write(2, data[2]);
+    SNES::cpu.port_write(3, data[3]);
+    SNES::cpu.port_write(0, data[4]);
+    ++ik_perf_sound_commands;
+}""",
+    """#ifdef IKCORE_SGB_PERF_AUDIO_THREADED
+static void S9xSGBPerfQueueSound(const uint8 *data);
+#endif
+void S9xSGBPerfSoundCommand(const uint8 *data, uint32 len)
+{
+    if (!ik_perf_audio_active || !data || len < 5) return;
+#ifdef IKCORE_SGB_PERF_AUDIO_THREADED
+    // Do NOT touch SNES::cpu.port_write here while the worker is running.
+    // Retain all commands FIFO, including those emitted during the current
+    // GB frame; next-frame dispatch yields bounded one-frame latency.
+    S9xSGBPerfQueueSound(data);
+#else
+    SNES::cpu.port_write(1, data[1]);
+    SNES::cpu.port_write(2, data[2]);
+    SNES::cpu.port_write(3, data[3]);
+    SNES::cpu.port_write(0, data[4]);
+    ++ik_perf_sound_commands;
+#endif
+}""",
+    "parallel SPC SOUND FIFO wrapper")
+
+# Keep the previously validated upload transaction and its rejection logic.
+# Move only the mutation to the SPC worker; queue copies of the 4K payload.
+ac = replace_once(ac,
+    """void S9xSGBPerfSouTrn(const uint8 *src)
+{
+    if (!ik_perf_audio_active || !src) return;
+
+    size_t off = 0;""",
+    """#ifdef IKCORE_SGB_PERF_AUDIO_THREADED
+static void S9xSGBPerfQueueSouTrn(const uint8 *data_4k);
+static void S9xSGBPerfSouTrnApply(const uint8 *src)
+#else
+void S9xSGBPerfSouTrn(const uint8 *src)
+#endif
+{
+    if (!ik_perf_audio_active || !src) return;
+
+    size_t off = 0;""",
+    "parallel SPC transfer mutation on worker")
+
+# The implementation is placed before the closing #endif of the hybrid APU,
+# after the atomic validated SOU_TRN function.
+parallel_tail_anchor = """    ++ik_perf_sou_trn_commands;
+}
+#endif
+
+void S9xAPUTimingSetSpeedup(int ticks)
+{
+"""
+parallel_tail_replacement = r'''    ++ik_perf_sou_trn_commands;
+}
+
+#ifdef IKCORE_SGB_PERF_AUDIO_THREADED
+namespace {
+// FIFO populated ONLY by the GB emulation thread. The dispatch vector is
+// handed to the SPC worker only after the worker finished its last frame.
+struct IkSgbSoundEvent
+{
+    uint8_t type; // 0=SOUND, 1=SOU_TRN
+    uint8_t data[4];
+    std::vector<uint8_t> transfer;
+};
+static std::vector<IkSgbSoundEvent> ik_audio_pending;
+static std::vector<IkSgbSoundEvent> ik_audio_dispatch;
+static pthread_t ik_audio_tid;
+static pthread_mutex_t ik_audio_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t ik_audio_cv = PTHREAD_COND_INITIALIZER;
+static bool ik_audio_thread_ready = false;
+static bool ik_audio_stop = false;
+static bool ik_audio_requested = false;
+static bool ik_audio_done = true;
+static bool ik_audio_frame_active = false;
+static bool ik_audio_warned = false;
+
+static void IkApplySoundEvents()
+{
+    for (const auto &e : ik_audio_dispatch)
+    {
+        if (e.type == 0)
+        {
+            SNES::cpu.port_write(1, e.data[0]);
+            SNES::cpu.port_write(2, e.data[1]);
+            SNES::cpu.port_write(3, e.data[2]);
+            SNES::cpu.port_write(0, e.data[3]);
+            ++ik_perf_sound_commands;
+        }
+        else if (e.type == 1 && e.transfer.size() == 4096)
+            S9xSGBPerfSouTrnApply(e.transfer.data());
+    }
+}
+
+static void *IkSpcWorkerMain(void *)
+{
+    for (;;)
+    {
+        pthread_mutex_lock(&ik_audio_mutex);
+        while (!ik_audio_requested && !ik_audio_stop)
+            pthread_cond_wait(&ik_audio_cv, &ik_audio_mutex);
+        if (ik_audio_stop)
+        {
+            pthread_mutex_unlock(&ik_audio_mutex);
+            break;
+        }
+        ik_audio_requested = false;
+        pthread_mutex_unlock(&ik_audio_mutex);
+
+        // All SPC state and its resampler are exclusively touched here
+        // until the GB thread waits for ik_audio_done in EndFrame.
+        IkApplySoundEvents();
+        S9xSGBPerfAudioFrame();
+
+        pthread_mutex_lock(&ik_audio_mutex);
+        ik_audio_done = true;
+        pthread_cond_signal(&ik_audio_cv);
+        pthread_mutex_unlock(&ik_audio_mutex);
+    }
+    return nullptr;
+}
+} // anonymous namespace
+
+static void S9xSGBPerfQueueSound(const uint8 *data)
+{
+    IkSgbSoundEvent event{};
+    event.type = 0;
+    event.data[0] = data[1];
+    event.data[1] = data[2];
+    event.data[2] = data[3];
+    event.data[3] = data[4];
+    ik_audio_pending.emplace_back(std::move(event));
+}
+
+static void S9xSGBPerfQueueSouTrn(const uint8 *data_4k)
+{
+    IkSgbSoundEvent event{};
+    event.type = 1;
+    event.transfer.assign(data_4k, data_4k + 4096);
+    ik_audio_pending.emplace_back(std::move(event));
+}
+
+void S9xSGBPerfSouTrn(const uint8 *src)
+{
+    if (!ik_perf_audio_active || !src) return;
+    S9xSGBPerfQueueSouTrn(src);
+}
+
+void S9xSGBPerfAudioBeginFrame(void)
+{
+    if (!ik_perf_audio_active) return;
+    // Every EndFrame waits for the previous job, so these vectors cannot
+    // be accessed by the worker while being swapped here.
+    ik_audio_dispatch.clear();
+    ik_audio_dispatch.swap(ik_audio_pending);
+    ik_audio_frame_active = true;
+    if (ik_audio_thread_ready)
+    {
+        pthread_mutex_lock(&ik_audio_mutex);
+        ik_audio_done = false;
+        ik_audio_requested = true;
+        pthread_cond_signal(&ik_audio_cv);
+        pthread_mutex_unlock(&ik_audio_mutex);
+    }
+}
+
+void S9xSGBPerfAudioEndFrame(void)
+{
+    if (!ik_perf_audio_active || !ik_audio_frame_active) return;
+    if (ik_audio_thread_ready)
+    {
+        pthread_mutex_lock(&ik_audio_mutex);
+        while (!ik_audio_done)
+            pthread_cond_wait(&ik_audio_cv, &ik_audio_mutex);
+        pthread_mutex_unlock(&ik_audio_mutex);
+    }
+    else
+    {
+        // Worker creation failure: exactly the previous sequential path.
+        IkApplySoundEvents();
+        S9xSGBPerfAudioFrame();
+    }
+    ik_audio_dispatch.clear();
+    ik_audio_frame_active = false;
+}
+
+void S9xSGBPerfAudioShutdown(void)
+{
+    if (ik_audio_frame_active)
+        S9xSGBPerfAudioEndFrame();
+    if (ik_audio_thread_ready)
+    {
+        pthread_mutex_lock(&ik_audio_mutex);
+        ik_audio_stop = true;
+        pthread_cond_signal(&ik_audio_cv);
+        pthread_mutex_unlock(&ik_audio_mutex);
+        pthread_join(ik_audio_tid, nullptr);
+        ik_audio_thread_ready = false;
+    }
+    ik_audio_pending.clear();
+    ik_audio_dispatch.clear();
+    ik_audio_stop = false;
+    ik_audio_requested = false;
+    ik_audio_done = true;
+    ik_audio_frame_active = false;
+    ik_perf_audio_active = false;
+}
+
+void S9xSGBPerfAudioStartThread(void)
+{
+    if (ik_audio_thread_ready) return;
+    ik_audio_stop = false;
+    ik_audio_requested = false;
+    ik_audio_done = true;
+    int rc = pthread_create(&ik_audio_tid, nullptr, IkSpcWorkerMain, nullptr);
+    ik_audio_thread_ready = (rc == 0);
+    if (!ik_audio_thread_ready && !ik_audio_warned)
+    {
+        ik_audio_warned = true;
+        S9xMessage(S9X_INFO, S9X_ROM_INFO,
+                   "IKCORE: SPC audio worker unavailable; using serial fallback.");
+    }
+    else if (ik_audio_thread_ready)
+        S9xMessage(S9X_INFO, S9X_ROM_INFO,
+                   "IKCORE: parallel SNES SPC/DSP active, GB and border unchanged.");
+}
+#endif
+#endif
+
+void S9xAPUTimingSetSpeedup(int ticks)
+{
+'''
+ac = replace_once(ac, parallel_tail_anchor, parallel_tail_replacement,
+                  "parallel SPC append worker with atomic SOU_TRN")
+
+# Thread starts when the already-correct full-BIOS -> direct handoff executes.
+# The prior enable routine deliberately did not reset SPC RAM/DSP contents.
+ac = replace_once(ac,
+    """void S9xSGBPerfAudioEnable(void)
+{
+    ik_perf_audio_active = true;""",
+    """#ifdef IKCORE_SGB_PERF_AUDIO_THREADED
+void S9xSGBPerfAudioStartThread(void);
+#endif
+void S9xSGBPerfAudioEnable(void)
+{
+#ifdef IKCORE_SGB_PERF_AUDIO_THREADED
+    S9xSGBPerfAudioShutdown();
+#endif
+    ik_perf_audio_active = true;""",
+    "parallel SPC restart-safe enable")
+ac = replace_once(ac,
+    """    S9xSpcResetDrc();
+}
+
+bool8 S9xSGBPerfAudioActive(void)""",
+    """    S9xSpcResetDrc();
+#ifdef IKCORE_SGB_PERF_AUDIO_THREADED
+    S9xSGBPerfAudioStartThread();
+#endif
+}
+
+bool8 S9xSGBPerfAudioActive(void)""",
+    "parallel SPC enable worker after fixed audio rate")
+
+# Ensure the libretro core cannot unload a live worker; handle both normal
+# unload and in-game reset without changing the SNES or SGB code.
+ac = replace_once(ac,
+    """void S9xDeinitAPU(void)
+{
+""",
+    """void S9xDeinitAPU(void)
+{
+#if defined(IKCORE_SGB_HYBRID_AUDIO) && defined(IKCORE_SGB_PERF_AUDIO_THREADED)
+    S9xSGBPerfAudioShutdown();
+#endif
+""",
+    "parallel SPC unload join")
+ac = replace_once(ac,
+    """void S9xResetAPU(void)
+{
+""",
+    """void S9xResetAPU(void)
+{
+#if defined(IKCORE_SGB_HYBRID_AUDIO) && defined(IKCORE_SGB_PERF_AUDIO_THREADED)
+    S9xSGBPerfAudioShutdown();
+#endif
+""",
+    "parallel SPC hard reset join")
+ac = replace_once(ac,
+    """void S9xSoftResetAPU(void)
+{
+""",
+    """void S9xSoftResetAPU(void)
+{
+#if defined(IKCORE_SGB_HYBRID_AUDIO) && defined(IKCORE_SGB_PERF_AUDIO_THREADED)
+    S9xSGBPerfAudioShutdown();
+#endif
+""",
+    "parallel SPC soft reset join")
+
+APUCPP.write_text(ac, encoding="utf-8")
+
+CPU = ROOT / "supersnes9x" / "cpuexec.cpp"
+cc = CPU.read_text(encoding="utf-8-sig")
+cc = replace_once(cc,
+    """\t\tS9xSGBRunFrame();
+#ifdef IKCORE_SGB_HYBRID_AUDIO
+\t\tif (!Settings.InRunAhead && S9xSGBPerfAudioActive())
+\t\t\tS9xSGBPerfAudioFrame();
+#endif""",
+    """#if defined(IKCORE_SGB_HYBRID_AUDIO) && defined(IKCORE_SGB_PERF_AUDIO_THREADED)
+\t\tif (!Settings.InRunAhead && S9xSGBPerfAudioActive())
+\t\t\tS9xSGBPerfAudioBeginFrame();
+#endif
+\t\tS9xSGBRunFrame();
+#ifdef IKCORE_SGB_HYBRID_AUDIO
+\t\tif (!Settings.InRunAhead && S9xSGBPerfAudioActive())
+#ifdef IKCORE_SGB_PERF_AUDIO_THREADED
+\t\t\tS9xSGBPerfAudioEndFrame();
+#else
+\t\t\tS9xSGBPerfAudioFrame();
+#endif
+#endif""",
+    "parallel SPC begin/end sandwich around GB frame")
+CPU.write_text(cc, encoding="utf-8")
+print("IKCORE PARALLEL SPC SAFE DISPATCH: independent SNES audio worker applied.")
