@@ -36,7 +36,7 @@
 #define IKCORE_CORE_PATH "/usr/lib/ikcore/ikcore_sgbpack_libretro.so"
 #define IKCORE_STATE_DIR "/var/lib/hakchi/sgb-native-test"
 #define IKCORE_DEFAULT_PACK IKCORE_STATE_DIR "/KOF96_SGBPACK_v1_REUPLOAD.sfc"
-#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-perf2.log"
+#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-perf2-parallel.log"
 #define IKCORE_TEST_SECONDS 120.0
 #define IKCORE_EXIT_HOLD_SECONDS 1.5
 
@@ -1335,13 +1335,15 @@ int main(int argc, char **argv)
     double target_fps = 60.0988, frame_period = 1.0 / 60.0988;
     double deadline = 0.0, exit_combo_since = 0.0;
     unsigned long run_frames = 0, last_run_frames = 0;
+    unsigned long last_audio_generated = 0, last_audio_written = 0;
+    unsigned long last_alsa_recoveries = 0;
     int core_inited = 0;
     int game_loaded = 0;
     int success = 0;
 
     log_open();
     pack_path = select_pack_path(argc, argv);
-    log_printf("Ik Core Native PERF2 - direct SGB + retained SNES audio\n");
+    log_printf("Ik Core Native PERF2 PARALLEL - SGB + retained SNES audio\n");
     log_printf("audio       : ACTIVADO; salida ALSA real\n");
     log_printf("core        : %s\n", IKCORE_CORE_PATH);
     log_printf("core mode   : BIOS boot -> SGB directo + SPC/DSP SNES retenido + borde atomico\n");
@@ -1461,6 +1463,17 @@ int main(int argc, char **argv)
             log_printf("play FPS    : %.2f | capacidad trabajo: %.2f FPS | runs=%lu video=%lu\n",
                        interval > 0.0 ? (double)delta_frames / interval : 0.0,
                        capacity, run_frames, g_video_frames);
+            /* Passive one-second audio meter: compare production with ALSA's
+               32040 frames/s target without changing the audio path. It
+               tells us whether underruns are BIOS-only or persist in combat. */
+            log_printf("audio/sec   : gen=%.0f/s written=%.0f/s recover +%lu total=%lu ring=%zu\n",
+                       interval > 0.0 ? (double)(g_audio_frames_generated - last_audio_generated) / interval : 0.0,
+                       interval > 0.0 ? (double)(g_audio_frames_written - last_audio_written) / interval : 0.0,
+                       g_audio_recoveries - last_alsa_recoveries,
+                       g_audio_recoveries, g_audio_ring_count);
+            last_audio_generated = g_audio_frames_generated;
+            last_audio_written = g_audio_frames_written;
+            last_alsa_recoveries = g_audio_recoveries;
             last = n;
             last_run_frames = run_frames;
         }
