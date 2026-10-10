@@ -797,10 +797,16 @@ static void audio_ring_flush(void)
         if (wrote == -EAGAIN) return;
         if (wrote < 0) {
             if (p_snd_pcm_recover(g_pcm, (int)wrote, 1) >= 0) {
+                /*
+                 * After ALSA XRUN, the device is prepared but its playback
+                 * queue can be empty. Do not immediately replay a tiny packet:
+                 * return and allow our bounded queue to accumulate the normal
+                 * prefill before restarting. The samples remain queued.
+                 * This changes only the recovery path, not normal audio.
+                 */
                 g_audio_recoveries++;
-                wrote = p_snd_pcm_writei(g_pcm,
-                                         &g_audio_ring[g_audio_ring_read * 2u],
-                                         (unsigned long)contiguous);
+                g_audio_started = 0;
+                return;
             }
         }
         if (wrote <= 0) return;
