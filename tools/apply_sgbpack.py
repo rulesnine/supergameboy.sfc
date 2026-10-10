@@ -2649,9 +2649,9 @@ sgb_method_new = """\tbool    IsBootSetupComplete() const;
 sh = replace_once(sh, sgb_method_anchor, sgb_method_new,
                   "sgb.h PERF2 enter-direct method")
 
-sgb_c_anchor = """bool          S9xSGBScreenVisible(void);
+sgb_c_anchor = """bool          S9xSGBScreenVisible (void);
 """
-sgb_c_new = """bool          S9xSGBScreenVisible(void);
+sgb_c_new = """bool          S9xSGBScreenVisible (void);
 #ifdef IKCORE_SGB_HYBRID_AUDIO
 void          S9xSGBEnterPerfDirectMode(void);
 #endif
