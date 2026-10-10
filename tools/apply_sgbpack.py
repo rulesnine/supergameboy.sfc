@@ -1955,3 +1955,117 @@ sc = replace_once(sc, sync_setup, sync_setup_new, "sgb fixed profile RunSync set
 
 SGBCPP.write_text(sc, encoding="utf-8")
 print("IK Core A7 OPT 1/5 fixed-profile specialization applied.")
+
+
+# ---- A7 OPT 2/5: SM83 CPU + memory hot-path specialization
+# Preserve every machine cycle and bus-visible access. This pass only removes
+# runtime checks that are invariant in the dedicated SGB1/DMG/MBC5 build.
+
+CPUCPP = ROOT / "supersnes9x" / "sgb" / "gb_cpu.cpp"
+cc = CPUCPP.read_text(encoding="utf-8-sig")
+trace_old = """\tif (g_trace_hook) g_trace_hook(pc_at_fetch, op, state_);
+
+\tDispatch(state_, mem, op);
+"""
+trace_new = """#ifndef IKCORE_SGB_CPU_MEM_FAST
+\tif (g_trace_hook) g_trace_hook(pc_at_fetch, op, state_);
+#endif
+
+\tDispatch(state_, mem, op);
+"""
+cc = replace_once(cc, trace_old, trace_new, "gb_cpu fixed runtime trace hook")
+CPUCPP.write_text(cc, encoding="utf-8")
+
+OPSH = ROOT / "supersnes9x" / "sgb" / "gb_ops.h"
+oh = OPSH.read_text(encoding="utf-8-sig")
+ops_ns = """namespace SGB {
+
+// Dispatch a single non-CB opcode."""
+ops_pred = """namespace SGB {
+
+#ifdef IKCORE_SGB_CPU_MEM_FAST
+// Authentic SGB1 uses DMG hardware: these CGB-only branches are impossible.
+#define IKCORE_MEM_CGB_HW(mem) false
+#else
+#define IKCORE_MEM_CGB_HW(mem) ((mem).cgb_hw)
+#endif
+
+// Dispatch a single non-CB opcode."""
+oh = replace_once(oh, ops_ns, ops_pred, "gb_ops fixed DMG predicate")
+# Only the hot inline bus helpers use this member here. Protect no similarly
+# named members exist in this header.
+oh = oh.replace("mem.cgb_hw", "IKCORE_MEM_CGB_HW(mem)")
+OPSH.write_text(oh, encoding="utf-8")
+
+GBMC = ROOT / "supersnes9x" / "sgb" / "gb_memory.cpp"
+mc = GBMC.read_text(encoding="utf-8-sig")
+
+# Exact fixed-profile MemTick. Late-write reconstruction above this anchor is
+# left untouched. SGB1 is single-speed DMG hardware; timer/PPU/APU/cart
+# pointers are wired unconditionally by Emulator::Reset/StateLoad. MBC5 has
+# no RTC, so the generic MbcTickRtc call has no state to advance.
+stop_anchor = """\t// STOP halts the oscillator: DIV/TIMA and OAM DMA freeze; the APU
+\t// freezes too on DMG (it keeps running on CGB hardware).
+\tconst bool stopped = m.cpu && m.cpu->stopped;
+
+"""
+stop_new = """\t// STOP halts the oscillator: DIV/TIMA and OAM DMA freeze; the APU
+\t// freezes too on DMG (it keeps running on CGB hardware).
+\tconst bool stopped = m.cpu && m.cpu->stopped;
+
+#ifdef IKCORE_SGB_CPU_MEM_FAST
+\t// Dedicated SGB1/DMG path. Same machine-cycle ordering as the generic
+\t// code below, without pointer/double-speed/RTC branches that cannot vary.
+\tif (!stopped)
+\t\tTimerStep(*m.timer, m, tcycles);
+
+\tif (!stopped && tick_dma && (m.dma_active || m.dma_setup > 0))
+\t\tfor (int32_t t = 0; t < tcycles; t += 4)
+\t\t\tDmaTickM(m);
+
+\tif (tcycles > 0)
+\t{
+\t\tPpuStep(*m.ppu, m, tcycles);
+\t\tif (!stopped) ApuStep(*m.apu, tcycles);
+\t}
+\treturn;
+#endif
+
+"""
+mc = replace_once(mc, stop_anchor, stop_new, "gb_memory fixed MemTick path")
+
+# The overwhelmingly common instruction-fetch path after boot: ordinary MBC5
+# ROM read, no OAM DMA bus conflict. Keep the generic path for boot and DMA,
+# where the special bus/overlay semantics remain observable.
+read_anchor = """uint8_t MemRead(Memory &m, uint16_t addr)
+{
+\t// OAM DMA bus conflict:"""
+read_new = """uint8_t MemRead(Memory &m, uint16_t addr)
+{
+#ifdef IKCORE_SGB_CPU_MEM_FAST
+\tif (addr < 0x8000 && !m.boot_rom_enabled && !m.dma_active)
+\t\treturn MbcRead(m.cart->mbc, m.cart->rom, m.cart->sram, addr,
+\t\t               m.cart->mbc1_multicart, &m.cart->unl);
+#endif
+\t// OAM DMA bus conflict:"""
+mc = replace_once(mc, read_anchor, read_new, "gb_memory fixed ROM fetch path")
+
+write_anchor = """void MemWrite(Memory &m, uint16_t addr, uint8_t value)
+{
+\t// OAM DMA bus conflict"""
+write_new = """void MemWrite(Memory &m, uint16_t addr, uint8_t value)
+{
+#ifdef IKCORE_SGB_CPU_MEM_FAST
+\t// Mapper-register writes are always accepted even during OAM DMA. The
+\t// dedicated SGBPACK always has its MBC5 cart wired, so skip generic tests.
+\tif (addr < 0x8000)
+\t{
+\t\tMbcWrite(*m.cart, addr, value);
+\t\treturn;
+\t}
+#endif
+\t// OAM DMA bus conflict"""
+mc = replace_once(mc, write_anchor, write_new, "gb_memory fixed MBC write path")
+
+GBMC.write_text(mc, encoding="utf-8")
+print("IK Core A7 OPT 2/5 CPU/memory hot paths applied.")
