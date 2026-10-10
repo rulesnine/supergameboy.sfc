@@ -15,6 +15,12 @@
  * - keep full 256x224 SGB composite output and test real gameplay\n * - allow a clean return with SELECT+START held for 1.5 seconds\n *\n * - retain real SGB-initialized SNES SPC/DSP audio; atomic border swaps, no fade\n *\n * Real BIOS is used only for startup/APU initialization; gameplay is direct Ik Core.
  */
 #define _GNU_SOURCE
+#ifndef IKCORE_BUILD_NUMBER
+#define IKCORE_BUILD_NUMBER "local"
+#endif
+#ifndef IKCORE_BUILD_SHA
+#define IKCORE_BUILD_SHA "unknown"
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/fb.h>
@@ -137,7 +143,9 @@ static unsigned long g_audio_frames_written = 0;
 static unsigned long g_audio_frames_dropped = 0;
 static unsigned long g_audio_recoveries = 0;
 #define IKCORE_AUDIO_RING_FRAMES 8192u
-#define IKCORE_AUDIO_PREFILL_FRAMES 1024u
+#define IKCORE_AUDIO_PREFILL_FRAMES 2048u
+#define IKCORE_AUDIO_XRUN_REFILL_FRAMES 3072u
+static unsigned g_audio_required_prefill = IKCORE_AUDIO_PREFILL_FRAMES;
 static int16_t g_audio_ring[IKCORE_AUDIO_RING_FRAMES * 2u];
 static size_t g_audio_ring_read = 0;
 static size_t g_audio_ring_write = 0;
@@ -779,6 +787,7 @@ static void close_alsa(void)
     g_alsa_ready = 0;
     g_audio_ring_read = g_audio_ring_write = g_audio_ring_count = 0;
     g_audio_started = 0;
+    g_audio_required_prefill = IKCORE_AUDIO_PREFILL_FRAMES;
     if (g_libasound) {
         dlclose(g_libasound);
         g_libasound = NULL;
@@ -806,6 +815,11 @@ static void audio_ring_flush(void)
                  */
                 g_audio_recoveries++;
                 g_audio_started = 0;
+                g_audio_required_prefill = IKCORE_AUDIO_XRUN_REFILL_FRAMES;
+                if (g_audio_recoveries <= 5 || (g_audio_recoveries % 25u) == 0u)
+                    log_printf("ALSA XRUN   : recover=%lu err=%ld ring=%zu refill=%u\n",
+                               g_audio_recoveries, (long)wrote,
+                               g_audio_ring_count, g_audio_required_prefill);
                 return;
             }
         }
@@ -856,8 +870,9 @@ static size_t audio_batch_cb(const int16_t *data, size_t frames)
 
     /* ~32 ms prefill absorbs frame-time jitter before starting playback. */
     if (!g_audio_started) {
-        if (g_audio_ring_count < IKCORE_AUDIO_PREFILL_FRAMES) return frames;
+        if (g_audio_ring_count < g_audio_required_prefill) return frames;
         g_audio_started = 1;
+        g_audio_required_prefill = IKCORE_AUDIO_PREFILL_FRAMES;
     }
     audio_ring_flush();
 
@@ -1349,8 +1364,8 @@ int main(int argc, char **argv)
 
     log_open();
     pack_path = select_pack_path(argc, argv);
-    log_printf("Ik Core Native PERF2 PARALLEL - SGB + retained SNES audio\n");
-    log_printf("audio       : ACTIVADO; salida ALSA real\n");
+    log_printf("Ik Core Native PERF2 AUDIO XRUN CANDIDATE - build %s / %s\n", IKCORE_BUILD_NUMBER, IKCORE_BUILD_SHA);
+    log_printf("audio       : ACTIVADO; salida ALSA real; prefill=2048 refillXRUN=3072\n");
     log_printf("core        : %s\n", IKCORE_CORE_PATH);
     log_printf("core mode   : BIOS boot -> SGB directo + SPC/DSP SNES retenido + borde atomico\n");
     log_printf("SGBPACK     : %s\n", pack_path);
