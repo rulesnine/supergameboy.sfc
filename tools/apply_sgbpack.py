@@ -3125,3 +3125,131 @@ gp = replace_once(gp, a, b, "gb_ppu PERF2 transfer fallback")
 GBPPU.write_text(gp, encoding="utf-8")
 
 print("IK Core PERF2 exact-transfer PPU fallback applied.")
+
+
+# ---- PERF2 AUDIO AUDIT: bounded resampling and performance instrumentation --
+# This intentionally does not claim perfect SNES audio or real-device FPS.
+# It corrects a measurable source of pitch distortion: the former SGB BIOS
+# PI controller was also running after the hybrid switch and could alter
+# SPC production speed by up to +/-50% when the NES Mini couldn't keep up.
+# Direct audio is now fixed-rate; any underflow remains visible in counters.
+#
+# It also keeps the proven PERF1 deferred GB APU machinery (flushed before
+# GB APU register accesses and once per GB frame). The PERF2 workflow enables
+# the already-existing IKCORE_SGB_LAZY_APU code, rather than handwaving away
+# the 60->42 fps regression.
+
+APUCPP = ROOT / "supersnes9x" / "apu" / "apu.cpp"
+ac = APUCPP.read_text(encoding="utf-8-sig")
+ac = replace_once(ac, '#include "apu.h"\n',
+    '#include "apu.h"\n#ifdef IKCORE_SGB_HYBRID_AUDIO\n#include <chrono>\n#endif\n',
+    "PERF2 audio audit chrono header")
+
+audio_enable_old = """    S9xClearSamples();
+    S9xSpcSyncReset();
+}
+
+bool8 S9xSGBPerfAudioActive(void)
+"""
+audio_enable_new = """    S9xClearSamples();
+    S9xSpcSyncReset();
+    // Fixed-rate SPC production after SNES CPU retirement. The normal
+    // BIOS-only PI controller permits +/-50% pitch modulation, unsuitable
+    // when the host is slow: changing frequency does not recover CPU time.
+    S9xSpcResetDrc();
+}
+
+bool8 S9xSGBPerfAudioActive(void)
+"""
+ac = replace_once(ac, audio_enable_old, audio_enable_new,
+                  "PERF2 fixed-rate audio activation")
+
+audio_step_old = """void S9xSGBPerfAudioFrame(void)
+{
+    if (!ik_perf_audio_active) return;
+
+    ik_perf_smp_frac += IK_PERF_SMP_PER_FRAME;
+    const int cycles = (int)ik_perf_smp_frac;
+    ik_perf_smp_frac -= (double)cycles;
+    if (cycles <= 0) return;
+
+    SNES::smp.clock -= cycles;
+    SNES::smp.enter();
+    SNES::dsp.synchronize();
+}
+"""
+audio_step_new = """void S9xSGBPerfAudioFrame(void)
+{
+    if (!ik_perf_audio_active) return;
+
+    ik_perf_smp_frac += IK_PERF_SMP_PER_FRAME;
+    const int cycles = (int)ik_perf_smp_frac;
+    ik_perf_smp_frac -= (double)cycles;
+    if (cycles <= 0) return;
+
+    // This measures the isolated SPC700/DSP cost on the ARM device.
+    // Only hardware data can tell whether it fits the ~2ms PERF1 margin.
+    using IkClock = std::chrono::steady_clock;
+    static uint64 frames = 0;
+    static double accumulated_us = 0.0;
+    static double peak_us = 0.0;
+    const auto start = IkClock::now();
+
+    SNES::smp.clock -= cycles;
+    SNES::smp.enter();
+    SNES::dsp.synchronize();
+
+    const auto stop = IkClock::now();
+    const double elapsed_us =
+        std::chrono::duration<double, std::micro>(stop - start).count();
+    accumulated_us += elapsed_us;
+    if (elapsed_us > peak_us) peak_us = elapsed_us;
+    if (++frames % 300 == 0)
+    {
+        char report[192];
+        snprintf(report, sizeof report,
+                 "IKCORE SPC PROFILE: frames=%llu avg=%.3fms peak=%.3fms "
+                 "SOUND=%u SOU_TRN=%u resampler=%d",
+                 (unsigned long long)frames,
+                 accumulated_us / (1000.0 * (double)frames),
+                 peak_us / 1000.0,
+                 (unsigned)ik_perf_sound_commands,
+                 (unsigned)ik_perf_sou_trn_commands,
+                 S9xSpcOutAvailable());
+        S9xMessage(S9X_INFO, S9X_ROM_INFO, report);
+    }
+}
+"""
+ac = replace_once(ac, audio_step_old, audio_step_new,
+                  "PERF2 SPC isolated work cost telemetry")
+APUCPP.write_text(ac, encoding="utf-8")
+
+# Stop re-enabling the aggressive BIOS PI controller on every direct frame.
+LR = ROOT / "supersnes9x" / "libretro" / "libretro.cpp"
+lc = LR.read_text(encoding="utf-8-sig")
+sync_old = """    if ((Settings.SGB_BIOSModeActive && S9xSGBBIOSGBIsReleased())
+#ifdef IKCORE_SGB_HYBRID_AUDIO
+        || S9xSGBPerfAudioActive()
+#endif
+       )
+        S9xSpcSyncToConsumption();
+    else
+        S9xSpcSyncReset();
+"""
+sync_new = """    if (Settings.SGB_BIOSModeActive && S9xSGBBIOSGBIsReleased())
+        S9xSpcSyncToConsumption();
+#ifdef IKCORE_SGB_HYBRID_AUDIO
+    else if (S9xSGBPerfAudioActive())
+    {
+        // Hybrid SPC runs from its own fixed NTSC clock. Preserve its
+        // natural pitch and sample ratio instead of chasing a slow host.
+    }
+#endif
+    else
+        S9xSpcSyncReset();
+"""
+lc = replace_once(lc, sync_old, sync_new,
+                  "PERF2 suppress wide post-handoff rate controller")
+LR.write_text(lc, encoding="utf-8")
+
+print("PERF2 AUDIO AUDIT: fixed-pitch hybrid SPC + isolated SPC timer applied.")
