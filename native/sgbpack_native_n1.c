@@ -46,7 +46,7 @@ typedef unsigned int EGLBoolean;
 #define EGL_SURFACE_TYPE 0x3033
 #define EGL_WINDOW_BIT 0x0004
 #define EGL_RED_SIZE 0x3024
-#define EGL_GREEN_SIZE 0x3022
+#define EGL_GREEN_SIZE 0x3023
 #define EGL_BLUE_SIZE 0x3022
 #define EGL_ALPHA_SIZE 0x3021
 #define EGL_NONE 0x3038
