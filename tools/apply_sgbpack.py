@@ -2649,11 +2649,11 @@ sgb_method_new = """\tbool    IsBootSetupComplete() const;
 sh = replace_once(sh, sgb_method_anchor, sgb_method_new,
                   "sgb.h PERF2 enter-direct method")
 
-sgb_c_anchor = """bool          S9xSGBScreenVisible (void);
+sgb_c_anchor = """bool          S9xSGBScreenVisible(void);
 """
-sgb_c_new = """bool          S9xSGBScreenVisible (void);
+sgb_c_new = """bool          S9xSGBScreenVisible(void);
 #ifdef IKCORE_SGB_HYBRID_AUDIO
-void          S9xSGBEnterPerfDirectMode (void);
+void          S9xSGBEnterPerfDirectMode(void);
 #endif
 """
 sh = replace_once(sh, sgb_c_anchor, sgb_c_new,
@@ -2847,17 +2847,17 @@ sc = replace_once(sc, handoff_anchor, handoff_new,
                   "sgb.cpp PERF2 handoff method")
 
 # C facade near the other boot-state helpers.
-facade_anchor = """bool S9xSGBScreenVisible (void)
+facade_anchor = """bool S9xSGBScreenVisible(void)
 {
 \treturn SGB::Instance().IsScreenVisible();
 }
 """
-facade_new = """bool S9xSGBScreenVisible (void)
+facade_new = """bool S9xSGBScreenVisible(void)
 {
 \treturn SGB::Instance().IsScreenVisible();
 }
 #ifdef IKCORE_SGB_HYBRID_AUDIO
-void S9xSGBEnterPerfDirectMode (void)
+void S9xSGBEnterPerfDirectMode(void)
 {
 \tSGB::Instance().EnterPerfDirectMode();
 }
@@ -3056,11 +3056,11 @@ b = """\tvoid    EnterPerfDirectMode();
 #endif
 """
 sh = replace_once(sh, a, b, "sgb.h PERF2 accurate-transfer method")
-a = """void          S9xSGBEnterPerfDirectMode (void);
+a = """void          S9xSGBEnterPerfDirectMode(void);
 #endif
 """
-b = """void          S9xSGBEnterPerfDirectMode (void);
-bool          S9xSGBPerfNeedsAccuratePpu (void);
+b = """void          S9xSGBEnterPerfDirectMode(void);
+bool          S9xSGBPerfNeedsAccuratePpu(void);
 #endif
 """
 sh = replace_once(sh, a, b, "sgb.h PERF2 accurate-transfer facade")
@@ -3095,17 +3095,17 @@ bool Emulator::PerfNeedsAccuratePpu() const
 #endif
 """
 sc = replace_once(sc, end, rep, "sgb.cpp PERF2 accurate-transfer method")
-fac = """void S9xSGBEnterPerfDirectMode (void)
+fac = """void S9xSGBEnterPerfDirectMode(void)
 {
 \tSGB::Instance().EnterPerfDirectMode();
 }
 #endif
 """
-fac2 = """void S9xSGBEnterPerfDirectMode (void)
+fac2 = """void S9xSGBEnterPerfDirectMode(void)
 {
 \tSGB::Instance().EnterPerfDirectMode();
 }
-bool S9xSGBPerfNeedsAccuratePpu (void)
+bool S9xSGBPerfNeedsAccuratePpu(void)
 {
 \treturn SGB::Instance().PerfNeedsAccuratePpu();
 }
