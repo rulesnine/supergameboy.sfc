@@ -461,3 +461,365 @@ MMC.write_text(c, encoding="utf-8")
 
 
 print("SGBPACK and Ik Core source integration applied successfully.")
+
+
+# ---- N2.4 sampled GB/SGB profiler (compiled only with IKCORE_SGB_PROFILE)
+# The profiler is intentionally sampled: clock_gettime around every memory
+# machine-cycle would distort this Cortex-A7 workload. We sample 1/256 calls
+# and scale the totals, while frame/compositor/command timings are exact.
+
+GBMH = ROOT / "supersnes9x" / "sgb" / "gb_memory.h"
+gmh = GBMH.read_text(encoding="utf-8-sig")
+gmh_anchor = """void MemTick(Memory &m, int32_t tcycles, bool tick_dma = true);
+void MemOamBugIncDec(Memory &m, uint16_t value);
+"""
+gmh_new = """void MemTick(Memory &m, int32_t tcycles, bool tick_dma = true);
+void MemOamBugIncDec(Memory &m, uint16_t value);
+
+#ifdef IKCORE_SGB_PROFILE
+struct SgbMemProfile
+{
+	uint64_t calls;
+	uint64_t samples;
+	uint64_t timer_ns;
+	uint64_t dma_ns;
+	uint64_t ppu_ns;
+	uint64_t apu_ns;
+	uint64_t rtc_ns;
+};
+void SgbMemProfileReset(void);
+void SgbMemProfileGet(SgbMemProfile *out);
+#endif
+"""
+gmh = replace_once(gmh, gmh_anchor, gmh_new, "gb_memory.h profiler declarations")
+GBMH.write_text(gmh, encoding="utf-8")
+
+GBMC = ROOT / "supersnes9x" / "sgb" / "gb_memory.cpp"
+gmc = GBMC.read_text(encoding="utf-8-sig")
+gmc = replace_once(gmc, "#include <cstring>\n", "#include <cstring>\n#ifdef IKCORE_SGB_PROFILE\n#include <ctime>\n#endif\n", "gb_memory.cpp profiler include")
+
+gmc_anchor = """namespace SGB {
+
+namespace {
+}
+"""
+gmc_new = """namespace SGB {
+
+#ifdef IKCORE_SGB_PROFILE
+static SgbMemProfile g_ik_mem_prof = {};
+
+static inline uint64_t IkProfNowNs(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
+	       static_cast<uint64_t>(ts.tv_nsec);
+}
+
+void SgbMemProfileReset(void)
+{
+	std::memset(&g_ik_mem_prof, 0, sizeof g_ik_mem_prof);
+}
+
+void SgbMemProfileGet(SgbMemProfile *out)
+{
+	if (out) *out = g_ik_mem_prof;
+}
+#endif
+
+namespace {
+}
+"""
+gmc = replace_once(gmc, gmc_anchor, gmc_new, "gb_memory.cpp profiler globals")
+
+old_tick = """\tif (!stopped && m.timer) TimerStep(*m.timer, m, tcycles);
+
+\t// One DMA byte per 4 CPU T-cycles (a split write cycle ticks DMA only
+\t// in its first half so the engine still sees whole M-cycles).
+\tif (!stopped && tick_dma)
+\t\tfor (int32_t t = 0; t < tcycles; t += 4)
+\t\t\tDmaTickM(m);
+
+\tint32_t rt = tcycles;
+\tif (m.double_speed)
+\t{
+\t\tconst int32_t acc = m.ds_tick_rem + tcycles;
+\t\trt            = acc >> 1;
+\t\tm.ds_tick_rem = static_cast<uint8_t>(acc & 1);
+\t}
+\tif (rt > 0)
+\t{
+\t\tif (m.ppu) PpuStep(*m.ppu, m, rt);
+\t\tif (m.apu && !(stopped && !m.cgb_hw)) ApuStep(*m.apu, rt);
+\t\tif (m.cart) MbcTickRtc(m.cart->mbc, rt);
+\t}
+"""
+new_tick = """#ifdef IKCORE_SGB_PROFILE
+\t++g_ik_mem_prof.calls;
+\tconst bool ik_sample = (g_ik_mem_prof.calls & 0xFFu) == 0;
+\tif (ik_sample) ++g_ik_mem_prof.samples;
+\tuint64_t ik_t0 = 0;
+
+\tif (!stopped && m.timer)
+\t{
+\t\tif (ik_sample) ik_t0 = IkProfNowNs();
+\t\tTimerStep(*m.timer, m, tcycles);
+\t\tif (ik_sample) g_ik_mem_prof.timer_ns += IkProfNowNs() - ik_t0;
+\t}
+
+\tif (!stopped && tick_dma)
+\t{
+\t\tif (ik_sample) ik_t0 = IkProfNowNs();
+\t\tfor (int32_t t = 0; t < tcycles; t += 4)
+\t\t\tDmaTickM(m);
+\t\tif (ik_sample) g_ik_mem_prof.dma_ns += IkProfNowNs() - ik_t0;
+\t}
+
+\tint32_t rt = tcycles;
+\tif (m.double_speed)
+\t{
+\t\tconst int32_t acc = m.ds_tick_rem + tcycles;
+\t\trt            = acc >> 1;
+\t\tm.ds_tick_rem = static_cast<uint8_t>(acc & 1);
+\t}
+\tif (rt > 0)
+\t{
+\t\tif (m.ppu)
+\t\t{
+\t\t\tif (ik_sample) ik_t0 = IkProfNowNs();
+\t\t\tPpuStep(*m.ppu, m, rt);
+\t\t\tif (ik_sample) g_ik_mem_prof.ppu_ns += IkProfNowNs() - ik_t0;
+\t\t}
+\t\tif (m.apu && !(stopped && !m.cgb_hw))
+\t\t{
+\t\t\tif (ik_sample) ik_t0 = IkProfNowNs();
+\t\t\tApuStep(*m.apu, rt);
+\t\t\tif (ik_sample) g_ik_mem_prof.apu_ns += IkProfNowNs() - ik_t0;
+\t\t}
+\t\tif (m.cart)
+\t\t{
+\t\t\tif (ik_sample) ik_t0 = IkProfNowNs();
+\t\t\tMbcTickRtc(m.cart->mbc, rt);
+\t\t\tif (ik_sample) g_ik_mem_prof.rtc_ns += IkProfNowNs() - ik_t0;
+\t\t}
+\t}
+#else
+\tif (!stopped && m.timer) TimerStep(*m.timer, m, tcycles);
+
+\t// One DMA byte per 4 CPU T-cycles (a split write cycle ticks DMA only
+\t// in its first half so the engine still sees whole M-cycles).
+\tif (!stopped && tick_dma)
+\t\tfor (int32_t t = 0; t < tcycles; t += 4)
+\t\t\tDmaTickM(m);
+
+\tint32_t rt = tcycles;
+\tif (m.double_speed)
+\t{
+\t\tconst int32_t acc = m.ds_tick_rem + tcycles;
+\t\trt            = acc >> 1;
+\t\tm.ds_tick_rem = static_cast<uint8_t>(acc & 1);
+\t}
+\tif (rt > 0)
+\t{
+\t\tif (m.ppu) PpuStep(*m.ppu, m, rt);
+\t\tif (m.apu && !(stopped && !m.cgb_hw)) ApuStep(*m.apu, rt);
+\t\tif (m.cart) MbcTickRtc(m.cart->mbc, rt);
+\t}
+#endif
+"""
+gmc = replace_once(gmc, old_tick, new_tick, "gb_memory.cpp sampled component profiler")
+GBMC.write_text(gmc, encoding="utf-8")
+
+SGB = ROOT / "supersnes9x" / "sgb" / "sgb.cpp"
+sg = SGB.read_text(encoding="utf-8-sig")
+sg = replace_once(sg, "#include <vector>\n", "#include <vector>\n#ifdef IKCORE_SGB_PROFILE\n#include <ctime>\n#endif\n", "sgb.cpp profiler include")
+
+sg_anchor = """namespace SGB {
+
+// Embedded SGB1 / SGB2 GB-side boot ROMs."""
+sg_new = """namespace SGB {
+
+#ifdef IKCORE_SGB_PROFILE
+struct IkCoreSgbProfile
+{
+	uint64_t frames = 0;
+	uint64_t frame_ns = 0;
+	uint64_t cpu_steps = 0;
+	uint64_t cpu_samples = 0;
+	uint64_t cpu_step_sample_ns = 0;
+	uint64_t command_calls = 0;
+	uint64_t command_ns = 0;
+	uint64_t blit_calls = 0;
+	uint64_t blit_ns = 0;
+};
+
+static IkCoreSgbProfile g_ik_prof;
+
+static inline uint64_t IkSgbProfNowNs(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
+	       static_cast<uint64_t>(ts.tv_nsec);
+}
+
+struct IkSgbProfScope
+{
+	uint64_t *dst;
+	uint64_t t0;
+	explicit IkSgbProfScope(uint64_t *p) : dst(p), t0(IkSgbProfNowNs()) {}
+	~IkSgbProfScope() { *dst += IkSgbProfNowNs() - t0; }
+};
+
+static void IkSgbProfReset(void)
+{
+	g_ik_prof = IkCoreSgbProfile();
+	SgbMemProfileReset();
+}
+
+static void IkSgbProfReport(void)
+{
+	if (!g_ik_prof.frames) return;
+
+	SgbMemProfile mp = {};
+	SgbMemProfileGet(&mp);
+
+	const double frames = static_cast<double>(g_ik_prof.frames);
+	const double mem_scale = mp.samples ?
+		static_cast<double>(mp.calls) / static_cast<double>(mp.samples) : 0.0;
+	const double cpu_scale = g_ik_prof.cpu_samples ?
+		static_cast<double>(g_ik_prof.cpu_steps) /
+		static_cast<double>(g_ik_prof.cpu_samples) : 0.0;
+
+	const double frame_ms = static_cast<double>(g_ik_prof.frame_ns) / frames / 1.0e6;
+	const double cpu_incl_ms =
+		static_cast<double>(g_ik_prof.cpu_step_sample_ns) * cpu_scale / frames / 1.0e6;
+	const double timer_ms = static_cast<double>(mp.timer_ns) * mem_scale / frames / 1.0e6;
+	const double dma_ms   = static_cast<double>(mp.dma_ns)   * mem_scale / frames / 1.0e6;
+	const double ppu_ms   = static_cast<double>(mp.ppu_ns)   * mem_scale / frames / 1.0e6;
+	const double apu_ms   = static_cast<double>(mp.apu_ns)   * mem_scale / frames / 1.0e6;
+	const double rtc_ms   = static_cast<double>(mp.rtc_ns)   * mem_scale / frames / 1.0e6;
+	double cpu_bus_ms = cpu_incl_ms - timer_ms - dma_ms - ppu_ms - apu_ms - rtc_ms;
+	if (cpu_bus_ms < 0.0) cpu_bus_ms = 0.0;
+	const double cmd_ms = static_cast<double>(g_ik_prof.command_ns) / frames / 1.0e6;
+	const double blit_ms = g_ik_prof.blit_calls ?
+		static_cast<double>(g_ik_prof.blit_ns) /
+		static_cast<double>(g_ik_prof.blit_calls) / 1.0e6 : 0.0;
+
+	char msg[512];
+	std::snprintf(msg, sizeof msg,
+		"IKPROF frames=%llu frame=%.3fms SM83+bus~=%.3fms PPU~=%.3fms "
+		"APU~=%.3fms timer~=%.3fms DMA~=%.3fms RTC~=%.3fms "
+		"SGBcmd=%.3fms compose=%.3fms memSamples=%llu cpuSamples=%llu",
+		static_cast<unsigned long long>(g_ik_prof.frames),
+		frame_ms, cpu_bus_ms, ppu_ms, apu_ms, timer_ms, dma_ms, rtc_ms,
+		cmd_ms, blit_ms,
+		static_cast<unsigned long long>(mp.samples),
+		static_cast<unsigned long long>(g_ik_prof.cpu_samples));
+	S9xMessage(S9X_INFO, S9X_ROM_INFO, msg);
+}
+#endif
+
+// Embedded SGB1 / SGB2 GB-side boot ROMs."""
+sg = replace_once(sg, sg_anchor, sg_new, "sgb.cpp profiler globals")
+
+old_step = """\twhile (impl_->ppu.t_cycles < target_t)
+\t{
+\t\tconst bool was_boot = impl_->mem.boot_rom_enabled;
+\t\timpl_->cpu.Step(impl_->mem);
+
+\t\tif (was_boot && !impl_->mem.boot_rom_enabled &&
+"""
+new_step = """\twhile (impl_->ppu.t_cycles < target_t)
+\t{
+\t\tconst bool was_boot = impl_->mem.boot_rom_enabled;
+#ifdef IKCORE_SGB_PROFILE
+\t\t++g_ik_prof.cpu_steps;
+\t\tif ((g_ik_prof.cpu_steps & 0xFFu) == 0)
+\t\t{
+\t\t\tconst uint64_t ik_t0 = IkSgbProfNowNs();
+\t\t\timpl_->cpu.Step(impl_->mem);
+\t\t\tg_ik_prof.cpu_step_sample_ns += IkSgbProfNowNs() - ik_t0;
+\t\t\t++g_ik_prof.cpu_samples;
+\t\t}
+\t\telse
+\t\t{
+\t\t\timpl_->cpu.Step(impl_->mem);
+\t\t}
+#else
+\t\timpl_->cpu.Step(impl_->mem);
+#endif
+
+\t\tif (was_boot && !impl_->mem.boot_rom_enabled &&
+"""
+sg = replace_once(sg, old_step, new_step, "sgb.cpp sampled CPU profiler")
+
+old_cmd = """void Emulator::OnSgbCommandInternal(uint8_t cmd, const uint8_t *data, uint32_t len)
+{
+\tDbgPushCmd(cmd);
+"""
+new_cmd = """void Emulator::OnSgbCommandInternal(uint8_t cmd, const uint8_t *data, uint32_t len)
+{
+#ifdef IKCORE_SGB_PROFILE
+\tIkSgbProfScope ik_scope(&g_ik_prof.command_ns);
+\t++g_ik_prof.command_calls;
+#endif
+\tDbgPushCmd(cmd);
+"""
+sg = replace_once(sg, old_cmd, new_cmd, "sgb.cpp command profiler")
+
+old_facade = """bool S9xSGBInit(void)               { return SGB::Instance().Init(); }
+void S9xSGBDeinit(void)             { SGB::Instance().Deinit(); }
+"""
+new_facade = """bool S9xSGBInit(void)
+{
+#ifdef IKCORE_SGB_PROFILE
+\tSGB::IkSgbProfReset();
+#endif
+\treturn SGB::Instance().Init();
+}
+void S9xSGBDeinit(void)             { SGB::Instance().Deinit(); }
+"""
+sg = replace_once(sg, old_facade, new_facade, "sgb.cpp profiler reset")
+
+old_run_facade = """void S9xSGBRunFrame(void)           { SGB::Instance().RunFrame(); }
+void S9xSGBRunCycles(int tcycles)   { SGB::Instance().RunCycles(static_cast<int32_t>(tcycles)); }
+"""
+new_run_facade = """void S9xSGBRunFrame(void)
+{
+#ifdef IKCORE_SGB_PROFILE
+\tconst uint64_t ik_t0 = SGB::IkSgbProfNowNs();
+\tSGB::Instance().RunFrame();
+\tSGB::g_ik_prof.frame_ns += SGB::IkSgbProfNowNs() - ik_t0;
+\t++SGB::g_ik_prof.frames;
+\tif ((SGB::g_ik_prof.frames % 120u) == 0)
+\t\tSGB::IkSgbProfReport();
+#else
+\tSGB::Instance().RunFrame();
+#endif
+}
+void S9xSGBRunCycles(int tcycles)   { SGB::Instance().RunCycles(static_cast<int32_t>(tcycles)); }
+"""
+sg = replace_once(sg, old_run_facade, new_run_facade, "sgb.cpp frame profiler")
+
+old_blit_facade = """void S9xSGBBlitScreen(uint16_t *dest, uint32_t pitch_pixels)
+{
+\tSGB::Instance().BlitScreen(dest, pitch_pixels);
+}
+"""
+new_blit_facade = """void S9xSGBBlitScreen(uint16_t *dest, uint32_t pitch_pixels)
+{
+#ifdef IKCORE_SGB_PROFILE
+\tconst uint64_t ik_t0 = SGB::IkSgbProfNowNs();
+\tSGB::Instance().BlitScreen(dest, pitch_pixels);
+\tSGB::g_ik_prof.blit_ns += SGB::IkSgbProfNowNs() - ik_t0;
+\t++SGB::g_ik_prof.blit_calls;
+#else
+\tSGB::Instance().BlitScreen(dest, pitch_pixels);
+#endif
+}
+"""
+sg = replace_once(sg, old_blit_facade, new_blit_facade, "sgb.cpp compositor profiler")
+SGB.write_text(sg, encoding="utf-8")
+
+print("IK Core N2.4 sampled GB/SGB profiler integration applied.")
