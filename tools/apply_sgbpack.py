@@ -1114,3 +1114,71 @@ gt = replace_once(gt, timer_anchor, timer_new, "gb_timer.cpp event-free fast pat
 GBT.write_text(gt, encoding="utf-8")
 
 print("IK Core N2.6 exact idle fast paths applied.")
+
+
+# ---- N2.7 exact PPU idle-mode batching
+# HBlank/VBlank spend many dots doing only bookkeeping. Batch up to the
+# current MemTick slice when no dot-visible edge, delayed IRQ, palette/WX
+# pulse, output tail, line boundary, or LY=153 quirk can occur.
+
+GBPPU = ROOT / "supersnes9x" / "sgb" / "gb_ppu.cpp"
+gp = GBPPU.read_text(encoding="utf-8-sig")
+
+ppu_anchor = """\t// Swallow the dots a CPU-driven LCD enable would have consumed before
+\t// its first one (Emulator::Reset decides how many).
+\twhile (p.boot_skew > 0 && tcycles > 0) { --p.boot_skew; --tcycles; }
+\twhile (tcycles-- > 0)
+\t\tExecPpuDot(p, mem);
+}
+"""
+
+ppu_new = """\t// Swallow the dots a CPU-driven LCD enable would have consumed before
+\t// its first one (Emulator::Reset decides how many).
+\twhile (p.boot_skew > 0 && tcycles > 0) { --p.boot_skew; --tcycles; }
+
+#ifdef IKCORE_PPU_IDLE_FAST
+\t// The CPU advances the PPU in tiny machine-cycle slices. In settled
+\t// HBlank/VBlank most dots have no work other than mode_clock++. Skip the
+\t// per-dot switch only when every delayed/pipelined state is already quiet
+\t// and this slice cannot reach an internal mode/line/LY153 event.
+\tif (tcycles > 0 && tcycles <= 4 &&
+\t    p.pal_glitch == 0 && p.stat_irq_delay == 0 &&
+\t    p.vblank_irq_at == 0 && p.wx_write_cooldown == 0 &&
+\t    p.lcdc_d4 == p.lcdc && p.lcdc_d3 == p.lcdc &&
+\t    p.lcdc_d2 == p.lcdc && p.lcdc_shadow == p.lcdc &&
+\t    p.wx_d4 == p.wx && p.wx_d3 == p.wx &&
+\t    p.wx_d2 == p.wx && p.wx_d1 == p.wx)
+\t{
+\t\tif (p.mode == PpuMode::HBlank && p.om.done)
+\t\t{
+\t\t\tconst int32_t mode0_length =
+\t\t\t\tMODE0_DOTS - 4 - p.mode3_sprite_stall + p.lcdon_pad;
+\t\t\tif (p.mode_clock + tcycles < mode0_length)
+\t\t\t{
+\t\t\t\tp.mode_clock += tcycles;
+\t\t\t\treturn;
+\t\t\t}
+\t\t}
+\t\telse if (p.mode == PpuMode::VBlank)
+\t\t{
+\t\t\tconst bool ly153_edge =
+\t\t\t\tp.ly == 153 && p.mode_clock < 4 &&
+\t\t\t\tp.mode_clock + tcycles >= 4;
+\t\t\tif (!ly153_edge && p.mode_clock + tcycles < LINE_DOTS)
+\t\t\t{
+\t\t\t\tp.mode_clock += tcycles;
+\t\t\t\treturn;
+\t\t\t}
+\t\t}
+\t}
+#endif
+
+\twhile (tcycles-- > 0)
+\t\tExecPpuDot(p, mem);
+}
+"""
+
+gp = replace_once(gp, ppu_anchor, ppu_new, "gb_ppu.cpp idle-mode batching")
+GBPPU.write_text(gp, encoding="utf-8")
+
+print("IK Core N2.7 exact PPU idle batching applied.")
