@@ -2308,3 +2308,122 @@ gp = replace_once(gp, limit_anchor, limit_new, "gb_ppu fixed hardware sprite lim
 
 GBPPU.write_text(gp, encoding="utf-8")
 print("IK Core A7 OPT 3/5 fast DMG timing skeleton applied.")
+
+
+# ---- PERF1: direct SGB performance PPU
+# Dedicated NES Mini path. Keep our own SM83/SGB command engine and full
+# 256x224 SGB compositor, but replace the expensive dual FIFO/dot Mode-3
+# renderer with a single scanline renderer plus hardware-style timing events.
+# This is intentionally a performance architecture (mGBA-like event granularity),
+# not the full SameBoy-style per-dot validation path.
+
+GBPPU = ROOT / "supersnes9x" / "sgb" / "gb_ppu.cpp"
+gp = GBPPU.read_text(encoding="utf-8-sig")
+
+# The legacy renderer already resolves DMG BG/window/sprites directly from
+# VRAM/OAM and is otherwise unused by the current FIFO pipeline. Use it only
+# for PERF1 and only on the DMG/SGB1 path.
+win_activate = """\t\tif (!p.window_active && x == trigger_x &&
+\t\t\t(p.lcdc & 0x20) != 0 &&
+\t\t\tp.wy_triggered)
+\t\t{
+\t\t\tp.window_active  = true;
+\t\t\tp.window_start_x = static_cast<int16_t>(x);
+\t\t}
+"""
+win_activate_new = """\t\tif (!p.window_active && x == trigger_x &&
+\t\t\t(p.lcdc & 0x20) != 0 &&
+\t\t\tp.wy_triggered)
+\t\t{
+#ifdef IKCORE_SGB_PERF_PPU
+\t\t\t// The full FIFO path increments the output machine's internal
+\t\t\t// window line when activation commits. The scanline renderer
+\t\t\t// performs the same state transition here.
+\t\t\t++p.om.window_line;
+#endif
+\t\t\tp.window_active  = true;
+\t\t\tp.window_start_x = static_cast<int16_t>(x);
+\t\t}
+"""
+gp = replace_once(gp, win_activate, win_activate_new,
+                  "gb_ppu PERF1 window-line activation")
+
+transfer_old = """\tcase PpuMode::Transfer:
+\t{
+// Both machines advance on every mode-3 dot. The skeleton decides when
+// mode 3 ends; the output machine trails it by entry_delay dots and keeps
+// running into HBlank until it has produced all 160 pixels.
+\t\tif (!p.tm.done && Mode3Dot(p, p.tm, mem))
+\t\t{
+\t\t\tp.tm.done = true;
+\t\t\ttransitioned = Mode3Exit(p, p.tm, mem);
+\t\t}
+\t\tif (!p.om.done && Mode3Dot(p, p.om, mem))
+\t\t{
+\t\t\tp.om.done = true;
+\t\t\tMode3WxCarry(p, p.om);
+\t\t\tMode3OutputExit(p, p.om);
+\t\t}
+\t\tp.draw_x        = p.om.lcd_x;
+\t\tp.window_active = p.om.fetch_is_window || p.om.win_carry;
+\t\tbreak;
+\t}
+"""
+transfer_new = """\tcase PpuMode::Transfer:
+\t{
+#ifdef IKCORE_SGB_PERF_PPU
+\t\t// NES Mini performance path: preserve mode timing/STAT/OAM locks but
+\t\t// do not execute two full FIFO machines for every dot.  DMG mode-3
+\t\t// length is approximated from the documented base plus SCX fine
+\t\t// alignment and the hardware 10-sprite fetch budget.
+\t\tconst int32_t perf_sprites =
+\t\t\tp.sprite_count < GB_OAM_SCAN_LIMIT ? p.sprite_count : GB_OAM_SCAN_LIMIT;
+\t\tconst int32_t perf_stall = (p.scx & 7) + perf_sprites * SPRITE_STALL_DOTS;
+\t\tconst int32_t perf_len = MODE3_DOTS + perf_stall;
+
+\t\tif (p.mode_clock >= perf_len)
+\t\t{
+\t\t\t// Resolve the visible line once. The direct renderer samples the
+\t\t\t// line's latched registers and current VRAM/OAM; this is the same
+\t\t\t// high-level strategy used by fast handheld emulators and avoids
+\t\t\t// tens of thousands of FIFO state-machine iterations per frame.
+\t\t\tp.window_active = p.om.win_carry;
+\t\t\tfor (int x = 0; x < GB_SCREEN_WIDTH; ++x)
+\t\t\t{
+\t\t\t\tp.draw_x = static_cast<int16_t>(x);
+\t\t\t\tRenderPixel(p);
+\t\t\t}
+\t\t\tp.draw_x = GB_SCREEN_WIDTH;
+\t\t\tp.om.lcd_x = GB_SCREEN_WIDTH;
+\t\t\tp.tm.done = true;
+\t\t\tp.om.done = true;
+\t\t\tMode3WxCarry(p, p.om);
+\t\t\tFinalizeScanline(p);
+\t\t\ttransitioned = Mode3Exit(p, p.tm, mem);
+\t\t}
+#else
+// Both machines advance on every mode-3 dot. The skeleton decides when
+// mode 3 ends; the output machine trails it by entry_delay dots and keeps
+// running into HBlank until it has produced all 160 pixels.
+\t\tif (!p.tm.done && Mode3Dot(p, p.tm, mem))
+\t\t{
+\t\t\tp.tm.done = true;
+\t\t\ttransitioned = Mode3Exit(p, p.tm, mem);
+\t\t}
+\t\tif (!p.om.done && Mode3Dot(p, p.om, mem))
+\t\t{
+\t\t\tp.om.done = true;
+\t\t\tMode3WxCarry(p, p.om);
+\t\t\tMode3OutputExit(p, p.om);
+\t\t}
+\t\tp.draw_x        = p.om.lcd_x;
+\t\tp.window_active = p.om.fetch_is_window || p.om.win_carry;
+#endif
+\t\tbreak;
+\t}
+"""
+gp = replace_once(gp, transfer_old, transfer_new,
+                  "gb_ppu PERF1 event-driven Mode3")
+
+GBPPU.write_text(gp, encoding="utf-8")
+print("IK Core PERF1 direct/event-driven SGB PPU applied.")
