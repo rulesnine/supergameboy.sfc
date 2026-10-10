@@ -3253,3 +3253,49 @@ lc = replace_once(lc, sync_old, sync_new,
 LR.write_text(lc, encoding="utf-8")
 
 print("PERF2 AUDIO AUDIT: fixed-pitch hybrid SPC + isolated SPC timer applied.")
+
+
+# ---- PERF2 APU DIV EDGE FIX: preserve the GB envelope/sweep timebase -------
+# PERF1 deferred GB channel advancement but TimerStep still delivered DIV
+# frame-sequencer edges immediately. Flushing accumulated APU cycles first
+# prevents envelopes/length/sweep from jumping ahead of the samples that
+# lead to those events. Cost: only ~1024 rising/falling DIV edges per second,
+# rather than a per-M-cycle APU call (~1,000,000 per second).
+
+GBT = ROOT / "supersnes9x" / "sgb" / "gb_timer.cpp"
+gt = GBT.read_text(encoding="utf-8-sig")
+
+old = """\t\t\tif (was && !now)      ApuDivEvent(*mem.apu, mem.double_speed);
+\t\t\telse if (!was && now) ApuDivSecondaryEvent(*mem.apu);
+"""
+new = """\t\t\tif (was && !now)
+\t\t\t{
+#ifdef IKCORE_SGB_LAZY_APU
+\t\t\t\tMemFlushApu(mem);
+#endif
+\t\t\t\tApuDivEvent(*mem.apu, mem.double_speed);
+\t\t\t}
+\t\t\telse if (!was && now)
+\t\t\t{
+#ifdef IKCORE_SGB_LAZY_APU
+\t\t\t\tMemFlushApu(mem);
+#endif
+\t\t\t\tApuDivSecondaryEvent(*mem.apu);
+\t\t\t}
+"""
+gt = replace_once(gt, old, new, "PERF2 APU DIV envelope edge sync")
+
+old = """\t\tif (DivBit(old, abit))
+\t\t\tApuDivEvent(*mem.apu, mem.double_speed);
+"""
+new = """\t\tif (DivBit(old, abit))
+\t\t{
+#ifdef IKCORE_SGB_LAZY_APU
+\t\t\tMemFlushApu(mem);
+#endif
+\t\t\tApuDivEvent(*mem.apu, mem.double_speed);
+\t\t}
+"""
+gt = replace_once(gt, old, new, "PERF2 APU DIV reset edge sync")
+GBT.write_text(gt, encoding="utf-8")
+print("PERF2 APU DIV EDGE FIX: lazy GB APU flushes before sequencer events.")
