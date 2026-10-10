@@ -63,7 +63,7 @@ jobs:
 
           mkdir -p dist
 
-          "$CC"             --sysroot="$SYSROOT"             -O3 -pipe             -march=armv7-a -mtune=cortex-a7             -mfpu=neon-vfpv4 -mfloat-abi=hard             -D_FILE_OFFSET_BITS=64             native/sgbpack_native_n1.c             -o dist/sgbpack-native             -ldl
+          "$CC"             --sysroot="$SYSROOT"             -O3 -pipe             -march=armv7-a -mtune=cortex-a7             -mfpu=neon-vfpv4 -mfloat-abi=hard             -D_FILE_OFFSET_BITS=64             native/sgbpack_native_n1.c             -o dist/sgbpack-native             -Wl,-rpath-link,"$SYSROOT/lib/arm-linux-gnueabihf"             "$SYSROOT/lib/arm-linux-gnueabihf/libdl.so.2"
 
           file dist/sgbpack-native
           "$READELF" -h dist/sgbpack-native | tee dist/ELF_HEADER.txt
