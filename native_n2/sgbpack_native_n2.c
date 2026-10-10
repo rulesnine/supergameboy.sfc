@@ -1,18 +1,18 @@
 /*
- * Ik Core Native N2.10 — fixed timing-knob diagnostic + Clover EGL frontend
+ * Ik Core Native N2.11 — real-audio A/B diagnostic + Clover EGL frontend
  *
  * Hardware target: NES Classic / NES Mini (ARMv7 Cortex-A7, Mali-400 MP)
  *
- * N2.10 goals:
+ * N2.11 goals:
  * - keep the validated N1.7 Clover EGL lifecycle
  * - dlopen the Ik Core / SuperSnes9x SGBPACK libretro core directly
  * - load the SGBPACK1 test image without RetroArch
  * - render the core's real video through GLES2
- * - keep ALSA closed (audio disabled at the libretro environment layer)
- * - return to the N2.8 engine baseline and remove hot local-static knob guards
+ * - enable libretro audio and deliver real stereo S16_LE samples through ALSA
+ * - keep the N2.10 engine unchanged so this is an audio-only A/B
  * - map the Nintendo Clovercon NES pad to libretro joypad input
  *
- * - keep full 256x224 SGB composite output and test real gameplay\n * - allow a clean return with SELECT+START held for 1.5 seconds\n *\n * - keep the emulator's tuned default timing values; only ACID_* runtime overrides are disabled\n *\n * Audio remains disabled in N2.10 so ALSA/Clover audio is still isolated.
+ * - keep full 256x224 SGB composite output and test real gameplay\n * - allow a clean return with SELECT+START held for 1.5 seconds\n *\n * - open/close ALSA cleanly without stopping or pausing Clover services\n *\n * Audio is intentionally enabled in N2.11 to measure its real cost.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -36,7 +36,7 @@
 #define IKCORE_CORE_PATH "/usr/lib/ikcore/ikcore_sgbpack_libretro.so"
 #define IKCORE_STATE_DIR "/var/lib/hakchi/sgb-native-test"
 #define IKCORE_DEFAULT_PACK IKCORE_STATE_DIR "/KOF96_SGBPACK_v1_REUPLOAD.sfc"
-#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-n2_10.log"
+#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-n2_11.log"
 #define IKCORE_TEST_SECONDS 120.0
 #define IKCORE_EXIT_HOLD_SECONDS 1.5
 
@@ -112,7 +112,30 @@ typedef ptrdiff_t GLsizeiptr;
 static void *g_libegl = NULL;
 static void *g_libgles = NULL;
 static void *g_libcore = NULL;
+static void *g_libasound = NULL;
 static FILE *g_log = NULL;
+
+/* Minimal ALSA ABI loaded dynamically; no build-time libasound dependency. */
+typedef struct _snd_pcm snd_pcm_t;
+typedef long snd_pcm_sframes_t;
+#define SND_PCM_STREAM_PLAYBACK 0
+#define SND_PCM_NONBLOCK 0x00000001
+#define SND_PCM_ACCESS_RW_INTERLEAVED 3
+#define SND_PCM_FORMAT_S16_LE 2
+static int (*p_snd_pcm_open)(snd_pcm_t **, const char *, int, int);
+static int (*p_snd_pcm_close)(snd_pcm_t *);
+static int (*p_snd_pcm_set_params)(snd_pcm_t *, int, int, unsigned, unsigned, int, unsigned);
+static snd_pcm_sframes_t (*p_snd_pcm_writei)(snd_pcm_t *, const void *, unsigned long);
+static int (*p_snd_pcm_recover)(snd_pcm_t *, int, int);
+static int (*p_snd_pcm_prepare)(snd_pcm_t *);
+static const char *(*p_snd_strerror)(int);
+static snd_pcm_t *g_pcm = NULL;
+static int g_alsa_ready = 0;
+static unsigned g_audio_rate = 32040;
+static unsigned long g_audio_frames_generated = 0;
+static unsigned long g_audio_frames_written = 0;
+static unsigned long g_audio_frames_dropped = 0;
+static unsigned long g_audio_recoveries = 0;
 
 static EGLDisplay (*p_eglGetDisplay)(EGLNativeDisplayType);
 static EGLBoolean (*p_eglInitialize)(EGLDisplay,EGLint*,EGLint*);
@@ -653,18 +676,118 @@ static int16_t input_state_cb(unsigned port, unsigned device, unsigned index, un
     return (g_pad_mask & (uint16_t)(1u << id)) ? 1 : 0;
 }
 
+static int load_alsa(void)
+{
+#define LOAD_ALSA(name) do { *(void **)(&p_##name) = dlsym(g_libasound, #name); if (!p_##name) { log_printf("ERROR ALSA  : falta %s\n", #name); return -1; } } while (0)
+    g_libasound = dlopen("libasound.so.2", RTLD_NOW | RTLD_LOCAL);
+    if (!g_libasound) g_libasound = dlopen("libasound.so", RTLD_NOW | RTLD_LOCAL);
+    if (!g_libasound) {
+        log_printf("ERROR ALSA  : dlopen %s\n", dlerror());
+        return -1;
+    }
+    LOAD_ALSA(snd_pcm_open);
+    LOAD_ALSA(snd_pcm_close);
+    LOAD_ALSA(snd_pcm_set_params);
+    LOAD_ALSA(snd_pcm_writei);
+    LOAD_ALSA(snd_pcm_recover);
+    LOAD_ALSA(snd_pcm_prepare);
+    LOAD_ALSA(snd_strerror);
+    return 0;
+#undef LOAD_ALSA
+}
+
+static int init_alsa(unsigned rate)
+{
+    int rc;
+    const char *device = "default";
+    if (load_alsa() != 0) return -1;
+
+    rc = p_snd_pcm_open(&g_pcm, device, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
+    if (rc < 0) {
+        device = "hw:0,0";
+        rc = p_snd_pcm_open(&g_pcm, device, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
+    }
+    if (rc < 0 || !g_pcm) {
+        log_printf("ERROR ALSA  : snd_pcm_open fallo: %s\n",
+                   p_snd_strerror ? p_snd_strerror(rc) : "?");
+        g_pcm = NULL;
+        return -1;
+    }
+
+    rc = p_snd_pcm_set_params(g_pcm,
+                              SND_PCM_FORMAT_S16_LE,
+                              SND_PCM_ACCESS_RW_INTERLEAVED,
+                              2, rate, 1, 100000);
+    if (rc < 0) {
+        log_printf("ERROR ALSA  : set_params %u Hz fallo: %s\n",
+                   rate, p_snd_strerror ? p_snd_strerror(rc) : "?");
+        p_snd_pcm_close(g_pcm);
+        g_pcm = NULL;
+        return -1;
+    }
+
+    p_snd_pcm_prepare(g_pcm);
+    g_audio_rate = rate;
+    g_alsa_ready = 1;
+    log_printf("ALSA        : OK, %s, stereo S16_LE, %u Hz, nonblocking\n",
+               device, rate);
+    return 0;
+}
+
+static void close_alsa(void)
+{
+    if (g_pcm) {
+        p_snd_pcm_close(g_pcm);
+        g_pcm = NULL;
+    }
+    g_alsa_ready = 0;
+    if (g_libasound) {
+        dlclose(g_libasound);
+        g_libasound = NULL;
+    }
+}
+
 static size_t audio_batch_cb(const int16_t *data, size_t frames)
 {
-    (void)data;
-    g_audio_frames_discarded += (unsigned long)frames;
+    snd_pcm_sframes_t wrote;
+    g_audio_frames_generated += (unsigned long)frames;
+
+    if (!g_alsa_ready || !g_pcm || !data || frames == 0) {
+        g_audio_frames_dropped += (unsigned long)frames;
+        return frames;
+    }
+
+    wrote = p_snd_pcm_writei(g_pcm, data, (unsigned long)frames);
+    if (wrote < 0) {
+        if (wrote == -EAGAIN) {
+            g_audio_frames_dropped += (unsigned long)frames;
+            return frames;
+        }
+        if (p_snd_pcm_recover(g_pcm, (int)wrote, 1) >= 0) {
+            g_audio_recoveries++;
+            wrote = p_snd_pcm_writei(g_pcm, data, (unsigned long)frames);
+        }
+    }
+
+    if (wrote > 0) {
+        size_t n = (size_t)wrote > frames ? frames : (size_t)wrote;
+        g_audio_frames_written += (unsigned long)n;
+        if (n < frames) g_audio_frames_dropped += (unsigned long)(frames - n);
+    } else {
+        g_audio_frames_dropped += (unsigned long)frames;
+    }
+
+    /* Libretro callback contract: samples were accepted by the frontend.
+       We never block the emulation thread waiting for the ALSA device. */
     return frames;
 }
 
 static void audio_sample_cb(int16_t left, int16_t right)
 {
-    (void)left;
-    (void)right;
-    g_audio_frames_discarded++;
+    int16_t pair[2];
+    pair[0] = left;
+    pair[1] = right;
+    (void)audio_batch_cb(pair, 1);
 }
 
 static bool environ_cb(unsigned cmd, void *data)
@@ -697,7 +820,7 @@ static bool environ_cb(unsigned cmd, void *data)
             ((struct retro_log_callback *)data)->log = core_log;
             return true;
         case RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE:
-            *(int *)data = 1; /* video enabled, audio disabled */
+            *(int *)data = 3; /* video + audio enabled */
             return true;
         case RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION:
             *(unsigned *)data = 0; /* ask core to use legacy SET_VARIABLES */
@@ -1020,10 +1143,10 @@ int main(int argc, char **argv)
 
     log_open();
     pack_path = select_pack_path(argc, argv);
-    log_printf("Ik Core Native N2.10 - fixed default timing knobs\n");
-    log_printf("audio       : DESACTIVADO; ALSA no se abre\n");
+    log_printf("Ik Core Native N2.11 - real audio A/B\n");
+    log_printf("audio       : ACTIVADO; salida ALSA real\n");
     log_printf("core        : %s\n", IKCORE_CORE_PATH);
-    log_printf("core mode   : SGB directo + N2.8 fast paths + timing knobs constantes\n");
+    log_printf("core mode   : N2.10 sin cambios + audio real\n");
     log_printf("SGBPACK     : %s\n", pack_path);
 
     if (access(pack_path, R_OK) != 0) {
@@ -1073,12 +1196,21 @@ int main(int argc, char **argv)
                avinfo.geometry.base_width, avinfo.geometry.base_height,
                avinfo.geometry.max_width, avinfo.geometry.max_height,
                (double)g_core_aspect);
-    log_printf("timing      : %.3f fps / %.0f Hz audio (audio descartado)\n",
+    log_printf("timing      : %.3f fps / %.0f Hz audio\n",
                avinfo.timing.fps, avinfo.timing.sample_rate);
 
     if (avinfo.timing.fps > 30.0 && avinfo.timing.fps < 120.0)
         target_fps = avinfo.timing.fps;
     frame_period = 1.0 / target_fps;
+
+    {
+        unsigned arate = (avinfo.timing.sample_rate >= 8000.0 &&
+                          avinfo.timing.sample_rate <= 192000.0)
+                         ? (unsigned)(avinfo.timing.sample_rate + 0.5)
+                         : 32040u;
+        if (init_alsa(arate) != 0)
+            log_printf("ALSA        : NO DISPONIBLE; el core sigue generando audio para medirlo\n");
+    }
 
     log_printf("video path  : RGB565 16-bit a Mali; compacta filas solo si pitch > visible\n");
     log_printf("play test   : %.0f s a %.3f FPS objetivo\n", IKCORE_TEST_SECONDS, target_fps);
@@ -1141,6 +1273,7 @@ int main(int argc, char **argv)
 cleanup:
     if (game_loaded && core_retro_unload_game) core_retro_unload_game();
     if (core_inited && core_retro_deinit) core_retro_deinit();
+    close_alsa();
     close_core();
 
     if (g_padfd >= 0) {
@@ -1151,7 +1284,7 @@ cleanup:
 
     destroy_egl();
 
-    log_printf("\nFINAL N2.10\n");
+    log_printf("\nFINAL N2.11\n");
     log_printf("runs        : %lu\n", run_frames);
     log_printf("video frames: %lu\n", g_video_frames);
     log_printf("runtime     : %.2f s\n", test_elapsed);
@@ -1173,9 +1306,13 @@ cleanup:
                (g_swap_failed ? "EGL swap failure" : "timeout 120 s")));
     log_printf("last frame  : %ux%u\n", g_frame_w, g_frame_h);
     log_printf("input events: %lu\n", g_input_events);
-    log_printf("audio frames: %lu descartados / ALSA nunca abierto\n", g_audio_frames_discarded);
+    log_printf("audio gen   : %lu frames\n", g_audio_frames_generated);
+    log_printf("audio write : %lu frames\n", g_audio_frames_written);
+    log_printf("audio drop  : %lu frames\n", g_audio_frames_dropped);
+    log_printf("ALSA recover: %lu\n", g_audio_recoveries);
+    log_printf("ALSA close  : cerrado limpiamente\n");
     log_printf("EGL         : liberado correctamente\n");
-    log_printf("resultado   : %s\n", success ? "VIDEO SGB OK" : "FALLO; revisar ikcore-n2_10.log");
+    log_printf("resultado   : %s\n", success ? "VIDEO SGB OK" : "FALLO; revisar ikcore-n2_11.log");
     log_printf("log         : %s\n", IKCORE_LOG_PATH);
 
     if (g_log) {
@@ -1183,6 +1320,6 @@ cleanup:
         g_log = NULL;
     }
 
-    /* Always return cleanly to Clover for controlled N2.10 exits/errors. */
+    /* Always return cleanly to Clover for controlled N2.11 exits/errors. */
     return 0;
 }
