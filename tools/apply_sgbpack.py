@@ -823,3 +823,218 @@ sg = replace_once(sg, old_blit_facade, new_blit_facade, "sgb.cpp compositor prof
 SGB.write_text(sg, encoding="utf-8")
 
 print("IK Core N2.4 sampled GB/SGB profiler integration applied.")
+
+
+# ---- N2.5 lazy-APU structural optimization diagnostic
+# Keep GB/SGB behavior, but do not call ApuStep once per machine cycle.
+# Accumulate real-time APU cycles and flush at every APU-visible I/O access
+# plus once at the end of each direct GB frame. This preserves register/write
+# ordering while removing thousands of tiny ApuStep calls per frame.
+
+GBMH = ROOT / "supersnes9x" / "sgb" / "gb_memory.h"
+gmh = GBMH.read_text(encoding="utf-8-sig")
+
+lazy_field_anchor = """\t// Double-speed odd-cycle carry for MemTick's CPU→PPU/APU clock halving.
+\t// Transient (never serialized).
+\tuint8_t  ds_tick_rem = 0;
+"""
+lazy_field_new = """\t// Double-speed odd-cycle carry for MemTick's CPU→PPU/APU clock halving.
+\t// Transient (never serialized).
+\tuint8_t  ds_tick_rem = 0;
+
+#ifdef IKCORE_SGB_LAZY_APU
+\t// Deferred real-time APU cycles. Flushed before every APU-visible register
+\t// access and at the end of each direct GB frame.
+\tint32_t  apu_pending_cycles = 0;
+#endif
+"""
+gmh = replace_once(gmh, lazy_field_anchor, lazy_field_new, "gb_memory.h lazy APU field")
+
+lazy_decl_anchor = """void MemTick(Memory &m, int32_t tcycles, bool tick_dma = true);
+void MemOamBugIncDec(Memory &m, uint16_t value);
+"""
+lazy_decl_new = """void MemTick(Memory &m, int32_t tcycles, bool tick_dma = true);
+void MemOamBugIncDec(Memory &m, uint16_t value);
+#ifdef IKCORE_SGB_LAZY_APU
+void MemFlushApu(Memory &m);
+#endif
+"""
+gmh = replace_once(gmh, lazy_decl_anchor, lazy_decl_new, "gb_memory.h lazy APU declaration")
+GBMH.write_text(gmh, encoding="utf-8")
+
+GBMC = ROOT / "supersnes9x" / "sgb" / "gb_memory.cpp"
+gmc = GBMC.read_text(encoding="utf-8-sig")
+
+reset_anchor = """\tm.late_dots    = -1;
+\tm.ds_tick_rem  = 0;
+\tm.cgb_hw       = cgb;
+"""
+reset_new = """\tm.late_dots    = -1;
+\tm.ds_tick_rem  = 0;
+#ifdef IKCORE_SGB_LAZY_APU
+\tm.apu_pending_cycles = 0;
+#endif
+\tm.cgb_hw       = cgb;
+"""
+gmc = replace_once(gmc, reset_anchor, reset_new, "gb_memory.cpp lazy APU reset")
+
+tick_normal = """\tif (rt > 0)
+\t{
+\t\tif (m.ppu) PpuStep(*m.ppu, m, rt);
+\t\tif (m.apu && !(stopped && !m.cgb_hw)) ApuStep(*m.apu, rt);
+\t\tif (m.cart) MbcTickRtc(m.cart->mbc, rt);
+\t}
+#endif
+}
+"""
+tick_lazy = """\tif (rt > 0)
+\t{
+\t\tif (m.ppu) PpuStep(*m.ppu, m, rt);
+#ifdef IKCORE_SGB_LAZY_APU
+\t\tif (m.apu && !(stopped && !m.cgb_hw))
+\t\t\tm.apu_pending_cycles += rt;
+#else
+\t\tif (m.apu && !(stopped && !m.cgb_hw)) ApuStep(*m.apu, rt);
+#endif
+\t\t// RTC exists only on MBC3. Avoid a function call on every GB machine
+\t\t// cycle for all other mapper types (KOF96 uses MBC5).
+\t\tif (m.cart && m.cart->mbc.type == MbcType::MBC3)
+\t\t\tMbcTickRtc(m.cart->mbc, rt);
+\t}
+#endif
+}
+"""
+if (!gmc.includes(tick_normal)) throw new Error("normal MemTick tail anchor missing");
+gmc=gmc.replace(tick_normal,tick_lazy);
+
+flush_insert_anchor = """
+
+
+uint8_t MemRead(Memory &m, uint16_t addr)
+"""
+flush_insert = """
+
+#ifdef IKCORE_SGB_LAZY_APU
+void MemFlushApu(Memory &m)
+{
+\tif (!m.apu || m.apu_pending_cycles <= 0) return;
+\tconst int32_t cycles = m.apu_pending_cycles;
+\tm.apu_pending_cycles = 0;
+\tApuStep(*m.apu, cycles);
+}
+#endif
+
+uint8_t MemRead(Memory &m, uint16_t addr)
+"""
+gmc = replace_once(gmc, flush_insert_anchor, flush_insert, "gb_memory.cpp lazy APU flush insertion");
+
+// Sync PCM reads.
+gmc = replace_once(gmc,
+"""\t\tcase 0xFF76:
+\t\t\treturn (m.ppu && m.ppu->cgb && m.apu) ? ApuReadPcm12(*m.apu) : 0xFF;
+\t\tcase 0xFF77:
+\t\t\treturn (m.ppu && m.ppu->cgb && m.apu) ? ApuReadPcm34(*m.apu) : 0xFF;
+""",
+"""\t\tcase 0xFF76:
+#ifdef IKCORE_SGB_LAZY_APU
+\t\t\tMemFlushApu(m);
+#endif
+\t\t\treturn (m.ppu && m.ppu->cgb && m.apu) ? ApuReadPcm12(*m.apu) : 0xFF;
+\t\tcase 0xFF77:
+#ifdef IKCORE_SGB_LAZY_APU
+\t\t\tMemFlushApu(m);
+#endif
+\t\t\treturn (m.ppu && m.ppu->cgb && m.apu) ? ApuReadPcm34(*m.apu) : 0xFF;
+""", "gb_memory.cpp PCM lazy sync");
+
+// Sync normal APU reads.
+gmc = replace_once(gmc,
+"""\tif (addr >= 0xFF10 && addr <= 0xFF3F)
+\t{
+\t\treturn m.apu ? ApuRead(*m.apu, addr, m.ppu && m.ppu->cgb) : 0xFF;
+\t}
+""",
+"""\tif (addr >= 0xFF10 && addr <= 0xFF3F)
+\t{
+#ifdef IKCORE_SGB_LAZY_APU
+\t\tMemFlushApu(m);
+#endif
+\t\treturn m.apu ? ApuRead(*m.apu, addr, m.ppu && m.ppu->cgb) : 0xFF;
+\t}
+""", "gb_memory.cpp APU read lazy sync");
+
+// Sync normal APU writes.
+gmc = replace_once(gmc,
+"""\tif (addr >= 0xFF10 && addr <= 0xFF3F)
+\t{
+\t\tif (m.apu) ApuWrite(*m.apu, addr, value, m.ppu && m.ppu->cgb,
+\t\t                    m.timer ? m.timer->div_counter : 0, m.double_speed);
+\t\treturn;
+\t}
+""",
+"""\tif (addr >= 0xFF10 && addr <= 0xFF3F)
+\t{
+#ifdef IKCORE_SGB_LAZY_APU
+\t\tMemFlushApu(m);
+#endif
+\t\tif (m.apu) ApuWrite(*m.apu, addr, value, m.ppu && m.ppu->cgb,
+\t\t                    m.timer ? m.timer->div_counter : 0, m.double_speed);
+\t\treturn;
+\t}
+""", "gb_memory.cpp APU write lazy sync");
+
+GBMC.write_text(gmc, encoding="utf-8")
+
+SGB = ROOT / "supersnes9x" / "sgb" / "sgb.cpp"
+sg = SGB.read_text(encoding="utf-8-sig")
+
+frame_flush_anchor = """\twhile (!impl_->ppu.frame_ready && safety > 0 && (impl_->ppu.lcdc & 0x80))
+\t{
+\t\tRunCycles(456);
+\t\tsafety -= 456;
+\t}
+
+\t// Frame-locking pins GB time to the host's frame cadence, not the GB's
+"""
+frame_flush_new = """\twhile (!impl_->ppu.frame_ready && safety > 0 && (impl_->ppu.lcdc & 0x80))
+\t{
+\t\tRunCycles(456);
+\t\tsafety -= 456;
+\t}
+
+#ifdef IKCORE_SGB_LAZY_APU
+\t// Flush deferred audio to this exact frame boundary. Register accesses
+\t// already force earlier synchronization when the game touches the APU.
+\tMemFlushApu(impl_->mem);
+#endif
+
+\t// Frame-locking pins GB time to the host's frame cadence, not the GB's
+"""
+sg = replace_once(sg, frame_flush_anchor, frame_flush_new, "sgb.cpp frame-end lazy APU flush");
+
+// Emit one diagnostic marker on init; no per-cycle timers.
+init_anchor = """bool S9xSGBInit(void)
+{
+#ifdef IKCORE_SGB_PROFILE
+\tSGB::IkSgbProfReset();
+#endif
+\treturn SGB::Instance().Init();
+}
+"""
+init_new = """bool S9xSGBInit(void)
+{
+#ifdef IKCORE_SGB_PROFILE
+\tSGB::IkSgbProfReset();
+#endif
+#ifdef IKCORE_SGB_LAZY_APU
+\tS9xMessage(S9X_INFO, S9X_ROM_INFO,
+\t           "IKOPT N2.5 lazy APU synchronization enabled.");
+#endif
+\treturn SGB::Instance().Init();
+}
+"""
+sg = replace_once(sg, init_anchor, init_new, "sgb.cpp lazy APU marker");
+
+SGB.write_text(sg, encoding="utf-8")
+
+print("IK Core N2.5 lazy-APU optimization integration applied.")
