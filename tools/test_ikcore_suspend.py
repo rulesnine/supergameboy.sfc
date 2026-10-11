@@ -69,6 +69,7 @@ enum { RETRO_PIXEL_FORMAT_0RGB1555=0,RETRO_PIXEL_FORMAT_XRGB8888=1,
        RETRO_PIXEL_FORMAT_RGB565=2 };
 static int g_pixel_format=RETRO_PIXEL_FORMAT_RGB565;
 static unsigned long g_video_frames=1;
+static double now_s(void) { return 1.0; }
 static uint8_t fake_state[128];
 static int load_count=0;
 static int fake_direct_mode=1;
