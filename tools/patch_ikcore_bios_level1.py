@@ -16,17 +16,17 @@ p=Path(sys.argv[1]) if len(sys.argv)>1 else Path("supersnes9x/sgb/gb_ppu.cpp")
 src=p.read_text(encoding="utf-8-sig")
 original=src
 
-def change(old,new,why):
+def change(old,new,why,expected=1):
     global src
     n=src.count(old)
-    if n!=1:
-        raise SystemExit(f"LEVEL1 refused {why}: expected 1 anchor, got {n}")
+    if n!=expected:
+        raise SystemExit(f"LEVEL1 refused {why}: expected {expected} anchor(s), got {n}")
     src=src.replace(old,new,1)
 
 change("""\t\tif (x < sx || x >= sx + 8) continue;""",
        """\t\t// Equivalent bounds test; keeps negative off-screen X correct.
 \t\tif (static_cast<unsigned>(x - sx) >= 8u) continue;""",
-       "DMG sprite overlap")
+       "DMG sprite overlap",expected=2)
 
 change("""\t\tif (x < sx || x >= sx + 8) continue;""",
        """\t\t// Same unsigned 8-pixel interval test for CGB sprites.
