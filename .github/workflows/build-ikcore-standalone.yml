@@ -7,6 +7,8 @@ on:
       - 'tools/prepare_ikcore_standalone.py'
       - 'tools/patch_ikcore_hakchi_loader.py'
       - 'native_n2/ikcore_hakchi_launcher.sh'
+      - 'tools/patch_ikcore_sram.py'
+      - 'tools/test_ikcore_sram.py'
       - '.github/workflows/build-ikcore-standalone.yml'
 
 permissions:
@@ -168,6 +170,10 @@ jobs:
             "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
           python3 "$GITHUB_WORKSPACE/ikcore-project/tools/patch_ikcore_hakchi_loader.py" \
             "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
+          python3 "$GITHUB_WORKSPACE/ikcore-project/tools/patch_ikcore_sram.py" \
+            "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
+          python3 "$GITHUB_WORKSPACE/ikcore-project/tools/test_ikcore_sram.py" \
+            "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
           sed -i "s/__IKCORE_RUN_NUMBER__/${GITHUB_RUN_NUMBER}/g" "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
           grep -Fq 'while (!g_shutdown_requested && !g_swap_failed)' "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
           grep -Fq 'return NULL;' "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
@@ -300,6 +306,11 @@ jobs:
           it identifies the selected CLV-xxxxx game from save-state argv,
           then selects ONE verified SGBPACK1 in that game's directory.
           Logs all argv / cwd / inferred game ID for diagnostics.
+          Internal game save RAM (.srm) is stored permanently in:
+            /var/lib/hakchi/ikcore-saves/CLV-X-XXXXX.srm
+          It is restored on start, saved if changed every ~5 seconds and
+          flushed on normal exit. Saves never enter the .7z temp folder;
+          corrupt/wrong-sized existing saves are never overwritten.
           Unlike experimental #137, no 120 second automatic exit.
           Exit back to Clover: hold SELECT+START for 1.5 seconds.
           Audio, graphics, SGB border and SPC700 code: unchanged from #137.
