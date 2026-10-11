@@ -84,6 +84,14 @@ static bool fake_unserialize(const void *data,size_t len) {
 static size_t (*core_retro_serialize_size)(void)=fake_serialize_size;
 static bool (*core_retro_serialize)(void *,size_t)=fake_serialize;
 static bool (*core_retro_unserialize)(const void *,size_t)=fake_unserialize;
+#define RETRO_MEMORY_SAVE_RAM 0
+static unsigned char *ik_sram_shadow=NULL;
+static size_t ik_sram_size=0;
+static int ik_sram_disabled=0;
+static void *fake_get_memory(unsigned type) { (void)type;return NULL; }
+static size_t fake_get_size(unsigned type) { (void)type;return 0; }
+static void *(*core_retro_get_memory_data)(unsigned)=fake_get_memory;
+static size_t (*core_retro_get_memory_size)(unsigned)=fake_get_size;
 static void log_printf(const char *fmt,...) {
     va_list ap;
     va_start(ap,fmt);
