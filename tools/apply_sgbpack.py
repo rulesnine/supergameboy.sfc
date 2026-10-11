@@ -2486,6 +2486,7 @@ namespace {
 static bool   ik_perf_audio_active = false;
 static double ik_perf_smp_frac = 0.0;
 static uint32 ik_perf_sound_commands = 0;
+static int ik_sfx_spc_cycles_advanced = 0;
 static uint32 ik_perf_sou_trn_commands = 0;
 
 // Native SPC700 clock / SGB NTSC frame cadence. Keep fractional cycles so the
@@ -2519,8 +2520,15 @@ void S9xSGBPerfAudioFrame(void)
     ik_perf_smp_frac -= (double)cycles;
     if (cycles <= 0) return;
 
-    SNES::smp.clock -= cycles;
-    SNES::smp.enter();
+    // SFX port handshakes already consumed part of this exact SPC frame.
+    // Do not change frame clocks or the #117 music resampler rate.
+    const int remaining = cycles > ik_sfx_spc_cycles_advanced
+                        ? cycles - ik_sfx_spc_cycles_advanced : 0;
+    ik_sfx_spc_cycles_advanced = 0;
+    if (remaining) {
+        SNES::smp.clock -= remaining;
+        SNES::smp.enter();
+    }
     SNES::dsp.synchronize();
 }
 
@@ -3603,8 +3611,18 @@ static void IkApplySoundEvents()
     {
         if (e.type == 0)
         {
-            if (e.data[0] == 0x12 && ik_last_sfx_a == 0x12)
+            if (e.data[0] == 0x12 && ik_last_sfx_a == 0x12 &&
+                ik_sfx_spc_cycles_advanced < 4096)
+            {
+                // The #127 zero and 0x12 were written back-to-back. SPC700
+                // never ran between them, so the restart was invisible.
+                // Let the original N-SPC driver read the zero BEFORE 0x12.
+                // Advance within this frame's SPC budget, not extra cycles.
                 SNES::cpu.port_write(1, 0x00);
+                SNES::smp.clock -= 1024;
+                SNES::smp.enter();
+                ik_sfx_spc_cycles_advanced += 1024;
+            }
             SNES::cpu.port_write(1, e.data[0]);
             SNES::cpu.port_write(2, e.data[1]);
             SNES::cpu.port_write(3, e.data[2]);
@@ -3723,6 +3741,7 @@ void S9xSGBPerfAudioShutdown(void)
         ik_audio_thread_ready = false;
     }
     ik_last_sfx_a = 0;
+    ik_sfx_spc_cycles_advanced = 0;
     ik_audio_pending.clear();
     ik_audio_dispatch.clear();
     ik_audio_stop = false;
