@@ -3607,85 +3607,145 @@ static bool ik_audio_requested = false;
 static bool ik_audio_done = true;
 static bool ik_audio_frame_active = false;
 static bool ik_audio_warned = false;
-// Original Super Game Boy ROM (sgb.sfc), SNES $00:BABA-$00:BB0B:
-// The 65816 compares SPC output ports $2140-$2143 against WRAM
-// $0344-$0347 (previously issued command), retries the previous ports
-// while unacknowledged, and permits the next staged SOUND command only
-// after acknowledgement or the original $80-frame timeout.
-// Ik Core's direct-mode SNES CPU is retired; reproduce ONLY that verified
-// SOUND-port handshake here on the dedicated SPC700 worker thread.
+// ROM-verified SGB v1.2 sound mailbox ($00:BABA-$00:BB0D):
+// After a successful send, STZ $0340/$0341/$0342 clears MUSIC/A/B, while
+// $0343 (pitch/volume attributes) intentionally survives. The following
+// firmware frame presents this all-zero idle effect even if the GB issues no
+// further SOUND packets. Omitting this idle stage in #136 prevented reliable
+// re-trigger of identical KOF96 character-writing SFX.
 //
-// Keep all four GB-defined bytes intact: A, B, pitch/volume, music.
-// No synthetic dummy packets, 4096-cycle delays, effect substitutions,
-// PCM resampling modifications, or changes to the SNES sound clock.
+// CPU->SPC output echo is checked against both previous 16-bit words;
+// the original maximum is 0x80 failed checks. Keep the original timeout,
+// retain every new GB SOUND packet FIFO, and log why commands are delayed.
+// Only this worker touches these vars: GB/graphics/PCM clock stay unchanged.
 static uint8_t ik_sgb_last_sound_ports[4] = {};
 static bool ik_sgb_waiting_for_echo = false;
 static unsigned ik_sgb_echo_wait_frames = 0;
+static bool ik_sgb_idle_due = false;
+static uint8_t ik_sgb_last_attrs = 0;
+static unsigned long ik_sgb_received = 0;
+static unsigned long ik_sgb_sent = 0;
+static unsigned long ik_sgb_idle_sent = 0;
+static unsigned long ik_sgb_ack = 0;
+static unsigned long ik_sgb_retries = 0;
+static unsigned long ik_sgb_timeouts = 0;
+static unsigned ik_sgb_max_wait = 0;
+static uint8_t ik_sgb_echo_ports[4] = {};
 
 static inline void IkSgbWriteSoundPorts(const uint8_t *p)
 {
-    // Original SGB BIOS transfers 16-bit words $0340->$2140 and
-    // $0342->$2142. The equivalent byte writes preserve these four latches.
-    SNES::cpu.port_write(1, p[0]); // SFX A
-    SNES::cpu.port_write(2, p[1]); // SFX B
-    SNES::cpu.port_write(3, p[2]); // pitch/volume
-    SNES::cpu.port_write(0, p[3]); // BGM/score
+    SNES::cpu.port_write(1, p[0]); // SFX A ($0341)
+    SNES::cpu.port_write(2, p[1]); // SFX B ($0342)
+    SNES::cpu.port_write(3, p[2]); // attributes ($0343)
+    SNES::cpu.port_write(0, p[3]); // score ($0340)
+}
+
+static inline void IkSgbSendAndWait(const uint8_t *p)
+{
+    IkSgbWriteSoundPorts(p);
+    for (int i = 0; i < 4; ++i)
+        ik_sgb_last_sound_ports[i] = p[i];
+    ik_sgb_waiting_for_echo = true;
+    ik_sgb_echo_wait_frames = 0;
 }
 
 static void IkApplySoundEvents()
 {
-    // Retain the entire GB-produced FIFO BEFORE possibly returning on a
-    // missing SPC acknowledgement; EndFrame clears ik_audio_dispatch.
-    // Swapping at the start is essential so no KOF96 sound packet is lost.
+    // Never let EndFrame discard a packet while we are waiting for echo.
     std::vector<IkSgbSoundEvent> work;
     work.swap(ik_audio_deferred);
     for (auto &e : ik_audio_dispatch)
+    {
+        if (e.type == 0) ++ik_sgb_received;
         work.emplace_back(std::move(e));
+    }
 
     if (ik_sgb_waiting_for_echo)
     {
-        const bool acknowledged =
-            ((uint8_t)SNES::smp.port_read(0) == ik_sgb_last_sound_ports[3]) &&
-            ((uint8_t)SNES::smp.port_read(1) == ik_sgb_last_sound_ports[0]) &&
-            ((uint8_t)SNES::smp.port_read(2) == ik_sgb_last_sound_ports[1]) &&
-            ((uint8_t)SNES::smp.port_read(3) == ik_sgb_last_sound_ports[2]);
+        ik_sgb_echo_ports[0] = (uint8_t)SNES::smp.port_read(1);
+        ik_sgb_echo_ports[1] = (uint8_t)SNES::smp.port_read(2);
+        ik_sgb_echo_ports[2] = (uint8_t)SNES::smp.port_read(3);
+        ik_sgb_echo_ports[3] = (uint8_t)SNES::smp.port_read(0);
+
+        bool acknowledged = true;
+        for (int i = 0; i < 4; ++i)
+            if (ik_sgb_echo_ports[i] != ik_sgb_last_sound_ports[i])
+                acknowledged = false;
 
         if (!acknowledged && ik_sgb_echo_wait_frames < 0x80)
         {
-            // Firmware $00:BAFD-$00:BB0B re-issues the last four bytes
-            // once per frame until the SPC program echoes them.
+            // Identical 16-bit retry writes to the $2140/$2142 mailbox.
             IkSgbWriteSoundPorts(ik_sgb_last_sound_ports);
             ++ik_sgb_echo_wait_frames;
+            ++ik_sgb_retries;
+            if (ik_sgb_echo_wait_frames > ik_sgb_max_wait)
+                ik_sgb_max_wait = ik_sgb_echo_wait_frames;
             ik_audio_deferred.swap(work);
             return;
         }
+        if (acknowledged)
+            ++ik_sgb_ack;
+        else
+            ++ik_sgb_timeouts;
         ik_sgb_waiting_for_echo = false;
         ik_sgb_echo_wait_frames = 0;
     }
 
-    // At most one new SOUND transaction per frame, matching the firmware's
-    // $00:BAD6 stage-and-send path instead of overwriting 4 input latches
-    // with multiple effect commands during a single SPC poll interval.
-    if (work.empty())
+    // Firmware sends cleared $0340-42 on its NEXT iteration, keeping the
+    // attributes in $0343. Send it even when the next KOF96 SOUND is already
+    // pending: the SPC must observe a real zero before re-triggering A=0x12.
+    if (ik_sgb_idle_due)
+    {
+        const uint8_t idle[4] = {0, 0, ik_sgb_last_attrs, 0};
+        IkSgbSendAndWait(idle);
+        ik_sgb_idle_due = false;
+        ++ik_sgb_idle_sent;
+        ik_audio_deferred.swap(work);
         return;
-
-    const auto &event = work.front();
-    if (event.type == 0)
-    {
-        IkSgbWriteSoundPorts(event.data);
-        for (int j = 0; j < 4; ++j)
-            ik_sgb_last_sound_ports[j] = event.data[j];
-        ik_sgb_waiting_for_echo = true;
-        ik_sgb_echo_wait_frames = 0;
-        ++ik_perf_sound_commands;
-    }
-    else if (event.type == 1 && event.transfer.size() == 4096)
-    {
-        S9xSGBPerfSouTrnApply(event.transfer.data());
     }
 
-    for (size_t i = 1; i < work.size(); ++i)
-        ik_audio_deferred.emplace_back(std::move(work[i]));
+    if (!work.empty())
+    {
+        auto &event = work.front();
+        if (event.type == 0)
+        {
+            IkSgbSendAndWait(event.data);
+            ik_sgb_last_attrs = event.data[2];
+            ik_sgb_idle_due =
+                event.data[0] != 0 || event.data[1] != 0 ||
+                event.data[3] != 0;
+            ++ik_sgb_sent;
+            ++ik_perf_sound_commands;
+        }
+        else if (event.type == 1 && event.transfer.size() == 4096)
+        {
+            S9xSGBPerfSouTrnApply(event.transfer.data());
+        }
+        for (size_t i = 1; i < work.size(); ++i)
+            ik_audio_deferred.emplace_back(std::move(work[i]));
+    }
+}
+
+static void IkSgbSoundTrace()
+{
+    static unsigned frames = 0;
+    if (++frames % 300 != 0) return;
+    char msg[290];
+    snprintf(msg, sizeof msg,
+             "IKCORE SGB MAILBOX: rx=%lu sent=%lu idle=%lu ack=%lu "
+             "retry=%lu timeout=%lu maxwait=%u pending=%u waiting=%u "
+             "echo=%02X/%02X/%02X/%02X expected=%02X/%02X/%02X/%02X",
+             ik_sgb_received, ik_sgb_sent, ik_sgb_idle_sent,
+             ik_sgb_ack, ik_sgb_retries, ik_sgb_timeouts,
+             ik_sgb_max_wait, (unsigned)ik_audio_deferred.size(),
+             (unsigned)ik_sgb_waiting_for_echo,
+             (unsigned)ik_sgb_echo_ports[0], (unsigned)ik_sgb_echo_ports[1],
+             (unsigned)ik_sgb_echo_ports[2], (unsigned)ik_sgb_echo_ports[3],
+             (unsigned)ik_sgb_last_sound_ports[0],
+             (unsigned)ik_sgb_last_sound_ports[1],
+             (unsigned)ik_sgb_last_sound_ports[2],
+             (unsigned)ik_sgb_last_sound_ports[3]);
+    S9xMessage(S9X_INFO, S9X_ROM_INFO, msg);
 }
 
 static void *IkSpcWorkerMain(void *)
@@ -3707,6 +3767,7 @@ static void *IkSpcWorkerMain(void *)
         // until the GB thread waits for ik_audio_done in EndFrame.
         IkApplySoundEvents();
         S9xSGBPerfAudioFrame();
+        IkSgbSoundTrace();
 
         pthread_mutex_lock(&ik_audio_mutex);
         ik_audio_done = true;
@@ -3796,6 +3857,12 @@ void S9xSGBPerfAudioShutdown(void)
     ik_audio_deferred.clear();
     ik_sgb_waiting_for_echo = false;
     ik_sgb_echo_wait_frames = 0;
+    ik_sgb_idle_due = false;
+    ik_sgb_last_attrs = 0;
+    ik_sgb_received = ik_sgb_sent = ik_sgb_idle_sent = 0;
+    ik_sgb_ack = ik_sgb_retries = ik_sgb_timeouts = 0;
+    ik_sgb_max_wait = 0;
+    memset(ik_sgb_echo_ports, 0, sizeof ik_sgb_echo_ports);
     memset(ik_sgb_last_sound_ports, 0, sizeof ik_sgb_last_sound_ports);
     ik_sfx_spc_cycles_advanced = 0;
     ik_audio_pending.clear();
