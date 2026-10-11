@@ -21,6 +21,7 @@ static int ik_suspend_ready = 0;
 static const void *ik_suspend_last_frame = NULL;
 static unsigned ik_suspend_frame_width = 0, ik_suspend_frame_height = 0;
 static size_t ik_suspend_frame_pitch = 0;
+static char ik_suspend_png[4096] = {0};
 /* Own one copied frame for Clover's preview. Libretro only guarantees the
  * callback's data pointer DURING video_cb, never at a later reset/exit.
  */
