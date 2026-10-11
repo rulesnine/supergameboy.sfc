@@ -224,7 +224,7 @@ static int ik_susp_png_chunk(FILE *f,const char *type,
 static int ik_susp_png_write(const char *path)
 {
     uint8_t *raw=NULL;
-    size_t rowsz,rawlen,i;
+    size_t rowsz,rawlen;
     unsigned w=ik_suspend_frame_width,h=ik_suspend_frame_height,y,x;
     const uint8_t *source=(const uint8_t *)ik_suspend_last_frame;
     uint8_t be[4],ihdr[13],zhead[2]={0x78,0x01};
