@@ -11,6 +11,9 @@ on:
       - 'tools/test_ikcore_sram.py'
       - 'tools/patch_ikcore_reset.py'
       - 'tools/test_ikcore_reset.py'
+      - 'tools/patch_ikcore_suspend.py'
+      - 'tools/test_ikcore_suspend.py'
+      - 'native_n2/ikcore_suspend.inc'
       - '.github/workflows/build-ikcore-standalone.yml'
 
 permissions:
@@ -176,6 +179,10 @@ jobs:
             "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
           python3 "$GITHUB_WORKSPACE/ikcore-project/tools/patch_ikcore_reset.py" \
             "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
+          python3 "$GITHUB_WORKSPACE/ikcore-project/tools/patch_ikcore_suspend.py" \
+            "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
+          python3 "$GITHUB_WORKSPACE/ikcore-project/tools/test_ikcore_suspend.py" \
+            "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
           python3 "$GITHUB_WORKSPACE/ikcore-project/tools/test_ikcore_reset.py" \
             "$GITHUB_WORKSPACE/dist/ikcore_standalone.c" \
             "$GITHUB_WORKSPACE/ikcore-project/native_n2/ikcore_hakchi_launcher.sh"
@@ -319,8 +326,16 @@ jobs:
           flushed on normal or signal-requested exit (TERM/INT/HUP/QUIT).
           The .7z wrapper now forwards termination to the native core and
           waits for the SRAM flush before removing temporary contents.
-          Whether the NES Mini hardware RESET delivers this signal is not
-          assumed and must be verified by an on-device test.
+          The physical NES Mini RESET path has been user-validated with #8.
+          New (experimental): Clover suspend point state and PNG preview
+          based on --save-on-quit, --save-screenshot-on-quit and
+          --load-state-file, saved in the exact Clover-provided paths.
+          State files bind to the selected game's CLV code AND an SGBPACK
+          content hash; wrong-game, partial, and checksum-invalid files
+          are rejected. Internal .srm is separate and unchanged.
+          IMPORTANT: pinned SGB-mode core serializes Game Boy/SGB state,
+          but SNES-side SPC/DSP audio is outside this particular state
+          serialization. Test audiovisual continuity before approval.
           Saves never enter the .7z temp folder;
           corrupt/wrong-sized existing saves are never overwritten.
           Unlike experimental #137, no 120 second automatic exit.
