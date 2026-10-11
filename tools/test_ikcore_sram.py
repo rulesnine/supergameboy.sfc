@@ -15,7 +15,11 @@ start = source.index("static int ikcore_extract_clv_id(")
 end = source.index("static char ikcore_resolved_pack[", start)
 id_fn = source[start:end]
 start = source.index("/* Dedicated native SRAM writer.")
-end = source.index("\nint main(int argc, char **argv)\n{", start)
+# The reset signal helper is tested separately; the SRAM host smoke test
+# only extracts its SRAM functions, not unrelated future frontend helpers.
+signal_start = source.find("/* Clover may terminate", start)
+end = (signal_start if signal_start >= 0
+       else source.index("\nint main(int argc, char **argv)\n{", start))
 sram_fn = source[start:end]
 
 with tempfile.TemporaryDirectory(prefix="ikcore-sram-smoke-") as d:
