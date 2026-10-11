@@ -17,6 +17,11 @@ static char ik_suspend_input[4096] = {0};
 static char ik_suspend_clv[16] = {0};
 static uint64_t ik_suspend_rom_hash = 0;
 static int ik_suspend_ready = 0;
+static uint8_t *ik_suspend_pending = NULL;
+static size_t ik_suspend_pending_size = 0;
+static double ik_suspend_probe_at = 0.0;
+static double ik_suspend_deadline = 0.0;
+static unsigned ik_suspend_probe_count = 0;
 
 static const void *ik_suspend_last_frame = NULL;
 static unsigned ik_suspend_frame_width = 0, ik_suspend_frame_height = 0;
@@ -386,27 +391,108 @@ static void ik_suspend_initialize(int argc,char **argv,const char *pack_path)
         log_printf("SUSP LOAD    : no hay punto válido, inicia juego normalmente.\n");
         return;
     }
-    if(core_retro_unserialize(snapshot,size)) {
-        /* A suspendpoint can contain older cart SRAM than the permanent
-         * .srm. Reset the comparison baseline to the restored RAM so the
-         * 5-second autosaver will NOT silently overwrite an existing, newer
-         * cartridge save merely because a suspendpoint was loaded.
-         * A subsequent real in-game save changes SRAM and persists normally.
+    /* The #137 PERF2 core starts in the SNES-side Super Game Boy BIOS.
+     * Only after the BIOS handshake does it switch to direct Game Boy mode.
+     * S9xUnfreezeGameMem() dispatches on Settings.SuperGameBoy, so loading
+     * a direct-mode SGB! snapshot here (before first frame) parses it as a
+     * SNES snapshot and fails. Keep the already-validated file in RAM and
+     * restore it only after the live core reports a compatible SGB! state.
+     */
+    if(size<12 || memcmp(snapshot,"SGB!",4)!=0 ||
+       ik_susp_get32(snapshot+4)!=11u ||
+       ik_susp_get32(snapshot+8)!=(uint32_t)(size-12u)) {
+        log_printf("SUSP LOAD    : cabecera del núcleo no corresponde a SGB v11; se conserva archivo.\n");
+        free(snapshot);
+        return;
+    }
+    ik_suspend_pending=snapshot;
+    ik_suspend_pending_size=size;
+    ik_suspend_probe_at=now_s()+0.5;
+    ik_suspend_deadline=now_s()+120.0;
+    ik_suspend_probe_count=0;
+    log_printf("SUSP DEFER   : %zu bytes válidos; esperando transición BIOS -> SGB directo.\n",size);
+}
+
+/* Called OUTSIDE the real-time audio callback, after each main-loop frame.
+ * Probe the live format only twice per second until the BIOS has handed off
+ * to the stable 60 FPS direct SGB engine. One matching probe serializes a
+ * temporary copy to verify SGB! before applying the user's saved snapshot.
+ */
+static void ik_suspend_maybe_restore(void)
+{
+    double t;
+    size_t live;
+    uint8_t *probe=NULL;
+    uint32_t saved_ver, live_ver;
+    int ready;
+    if(!ik_suspend_pending)return;
+    t=now_s();
+    if(t<ik_suspend_probe_at)return;
+    if(t>=ik_suspend_deadline) {
+        log_printf("SUSP TIMEOUT : no se detectó SGB directo en 120s; no se tocó el archivo.\n");
+        goto clear;
+    }
+    ik_suspend_probe_at=t+0.5;
+    live=core_retro_serialize_size();
+    if(live!=ik_suspend_pending_size) {
+        if((ik_suspend_probe_count++%8u)==0u)
+            log_printf("SUSP WAIT    : BIOS/otro formato (actual=%zu esperado=%zu).\n",
+                       live,ik_suspend_pending_size);
+        return;
+    }
+
+    /* The BIOS SNES serializer is a different format. Do not pass an SGB!
+     * state into it even if the serialized byte count happens to match.
+     */
+    probe=(uint8_t *)malloc(live);
+    if(!probe) {
+        log_printf("SUSP ERROR   : sin memoria para validar el modo directo.\n");
+        goto clear;
+    }
+    ready=core_retro_serialize(probe,live);
+    saved_ver=ik_susp_get32(ik_suspend_pending+4);
+    live_ver=(ready && live>=12)?ik_susp_get32(probe+4):0;
+    if(!ready || live<12 || memcmp(probe,"SGB!",4)!=0 ||
+       live_ver!=saved_ver ||
+       ik_susp_get32(probe+8)!=(uint32_t)(live-12u)) {
+        if((ik_suspend_probe_count++%8u)==0u)
+            log_printf("SUSP WAIT    : formato aún incompatible, sin modificar juego.\n");
+        free(probe);
+        return;
+    }
+    free(probe);
+    probe=NULL;
+    if(core_retro_unserialize(ik_suspend_pending,ik_suspend_pending_size)) {
+        /* Older suspendpoints can carry older cart SRAM. Do not overwrite
+         * the permanent .srm merely by reloading one: reset shadow so only
+         * subsequent actual in-game changes are committed.
          */
         if(ik_sram_shadow && !ik_sram_disabled) {
             size_t ram_size=core_retro_get_memory_size(RETRO_MEMORY_SAVE_RAM);
             void *ram=core_retro_get_memory_data(RETRO_MEMORY_SAVE_RAM);
             if(ram && ram_size==ik_sram_size) {
                 memcpy(ik_sram_shadow,ram,ram_size);
-                log_printf("SUSP SRAM    : cartucho protegido hasta nuevo guardado interno.\n");
+                log_printf("SUSP SRAM    : guardado interno protegido.\n");
             }
         }
-        log_printf("SUSP LOAD OK : %zu bytes restaurados desde %s\n",
-                   size,ik_suspend_input);
-    } else
-        log_printf("SUSP LOAD    : el núcleo rechazó el estado, inicia normalmente.\n");
-    free(snapshot);
+        log_printf("SUSP LOAD OK : restaurado tras BIOS, %zu bytes desde %s\n",
+                   ik_suspend_pending_size,ik_suspend_input);
+    } else {
+        log_printf("SUSP ERROR   : el núcleo rechazó estado SGB aun en modo compatible.\n");
+    }
+clear:
+    free(probe);
+    free(ik_suspend_pending);
+    ik_suspend_pending=NULL;
+    ik_suspend_pending_size=0;
 }
+static void ik_suspend_finish(void)
+{
+    free(ik_suspend_pending);
+    ik_suspend_pending=NULL;
+    ik_suspend_pending_size=0;
+}
+
 static void ik_suspend_save(void)
 {
     uint8_t *data=NULL;
@@ -425,6 +511,16 @@ static void ik_suspend_save(void)
     if(!data) { log_printf("SUSP ERROR   : memoria insuficiente.\n");return; }
     if(!core_retro_serialize(data,n)) {
         log_printf("SUSP ERROR   : retro_serialize devolvió error.\n");
+        free(data);
+        return;
+    }
+    /* Never generate a misleading Clover point during the preliminary BIOS
+     * phase: this suspend feature currently supports direct SGB v11 only.
+     */
+    if(memcmp(data,"SGB!",4)!=0 ||
+       ik_susp_get32(data+4)!=11u ||
+       ik_susp_get32(data+8)!=(uint32_t)(n-12u)) {
+        log_printf("SUSP SAVE    : fase BIOS; no crear estado incompatible.\n");
         free(data);
         return;
     }
