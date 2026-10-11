@@ -70,8 +70,13 @@ once("int main(int argc, char **argv)\n{\n", body+"\nint main(int argc, char **a
 once("    ik_sram_initialize(argc, argv);\n",
      "    ik_sram_initialize(argc, argv);\n"
      "    ik_suspend_initialize(argc, argv, pack_path);\n")
+once("        core_retro_run();\n        ik_sram_flush(0);\n",
+     "        core_retro_run();\n"
+     "        ik_suspend_maybe_restore();\n"
+     "        ik_sram_flush(0);\n")
 once("    if (game_loaded) ik_sram_flush(1);\n",
      "    if (game_loaded) ik_suspend_save();\n"
-     "    if (game_loaded) ik_sram_flush(1);\n")
+     "    if (game_loaded) ik_sram_flush(1);\n"
+     "    ik_suspend_finish();\n")
 p.write_text(src, "utf-8")
 print("IKCORE SUSPEND: state save/load + native Clover screenshot; #8 SRAM kept.")
