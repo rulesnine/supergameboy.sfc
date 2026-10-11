@@ -9,6 +9,8 @@ on:
       - 'native_n2/ikcore_hakchi_launcher.sh'
       - 'tools/patch_ikcore_sram.py'
       - 'tools/test_ikcore_sram.py'
+      - 'tools/patch_ikcore_reset.py'
+      - 'tools/test_ikcore_reset.py'
       - '.github/workflows/build-ikcore-standalone.yml'
 
 permissions:
@@ -172,6 +174,11 @@ jobs:
             "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
           python3 "$GITHUB_WORKSPACE/ikcore-project/tools/patch_ikcore_sram.py" \
             "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
+          python3 "$GITHUB_WORKSPACE/ikcore-project/tools/patch_ikcore_reset.py" \
+            "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
+          python3 "$GITHUB_WORKSPACE/ikcore-project/tools/test_ikcore_reset.py" \
+            "$GITHUB_WORKSPACE/dist/ikcore_standalone.c" \
+            "$GITHUB_WORKSPACE/ikcore-project/native_n2/ikcore_hakchi_launcher.sh"
           python3 "$GITHUB_WORKSPACE/ikcore-project/tools/test_ikcore_sram.py" \
             "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
           sed -i "s/__IKCORE_RUN_NUMBER__/${GITHUB_RUN_NUMBER}/g" "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
@@ -309,7 +316,12 @@ jobs:
           Internal game save RAM (.srm) is stored permanently in:
             /var/lib/hakchi/ikcore-saves/CLV-X-XXXXX.srm
           It is restored on start, saved if changed every ~5 seconds and
-          flushed on normal exit. Saves never enter the .7z temp folder;
+          flushed on normal or signal-requested exit (TERM/INT/HUP/QUIT).
+          The .7z wrapper now forwards termination to the native core and
+          waits for the SRAM flush before removing temporary contents.
+          Whether the NES Mini hardware RESET delivers this signal is not
+          assumed and must be verified by an on-device test.
+          Saves never enter the .7z temp folder;
           corrupt/wrong-sized existing saves are never overwritten.
           Unlike experimental #137, no 120 second automatic exit.
           Exit back to Clover: hold SELECT+START for 1.5 seconds.
