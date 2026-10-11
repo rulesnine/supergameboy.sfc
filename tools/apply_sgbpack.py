@@ -3224,7 +3224,8 @@ audio_step_new = """void S9xSGBPerfAudioFrame(void)
     if (++frames % 300 == 0) {
         char report[192];
         snprintf(report, sizeof report,
-                 "IKCORE SPC PROFILE: frames=%llu avg=%.3fms peak=%.3fms SOUND=%u SOU_TRN=%u resampler=%d",
+                 "IKCORE SPC PROFILE: frames=%llu avg=%.3fms peak=%.3fms "
+                 "SOUND=%u SOU_TRN=%u resampler=%d",
                  (unsigned long long)frames,
                  accumulated_us / (1000.0 * (double)frames),
                  peak_us / 1000.0,
