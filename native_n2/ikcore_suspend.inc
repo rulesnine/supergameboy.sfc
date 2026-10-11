@@ -14,7 +14,6 @@
 
 static char ik_suspend_output[4096] = {0};
 static char ik_suspend_input[4096] = {0};
-static char ik_suspend_png[4096] = {0};
 static char ik_suspend_clv[16] = {0};
 static uint64_t ik_suspend_rom_hash = 0;
 static int ik_suspend_ready = 0;
@@ -22,6 +21,14 @@ static int ik_suspend_ready = 0;
 static const void *ik_suspend_last_frame = NULL;
 static unsigned ik_suspend_frame_width = 0, ik_suspend_frame_height = 0;
 static size_t ik_suspend_frame_pitch = 0;
+/* Own one copied frame for Clover's preview. Libretro only guarantees the
+ * callback's data pointer DURING video_cb, never at a later reset/exit.
+ */
+static uint8_t *ik_suspend_framebuffer = NULL;
+static size_t ik_suspend_framebuffer_capacity = 0;
+static int ik_suspend_capture_enabled = 0;
+static int ik_suspend_capture_format = RETRO_PIXEL_FORMAT_RGB565;
+static double ik_suspend_next_capture = 0.0;
 
 static void ik_susp_le32(uint8_t *p, uint32_t v)
 {
@@ -246,14 +253,14 @@ static int ik_susp_png_write(const char *path)
         dst[0]=0; /* PNG filter: none */
         for(x=0;x<w;x++) {
             unsigned r,g,b;
-            if(g_pixel_format==RETRO_PIXEL_FORMAT_XRGB8888) {
+            if(ik_suspend_capture_format==RETRO_PIXEL_FORMAT_XRGB8888) {
                 uint32_t pix;
                 memcpy(&pix,src+(size_t)x*4,4);
                 r=(pix>>16)&255u;g=(pix>>8)&255u;b=pix&255u;
             } else {
                 uint16_t pix;
                 memcpy(&pix,src+(size_t)x*2,2);
-                if(g_pixel_format==RETRO_PIXEL_FORMAT_RGB565) {
+                if(ik_suspend_capture_format==RETRO_PIXEL_FORMAT_RGB565) {
                     r=(pix>>11)&31u;g=(pix>>5)&63u;b=pix&31u;
                     r=(r<<3)|(r>>2);g=(g<<2)|(g>>4);b=(b<<3)|(b>>2);
                 } else {
@@ -343,6 +350,7 @@ static void ik_suspend_initialize(int argc,char **argv,const char *pack_path)
     ik_susp_copy_path(ik_suspend_input,value);
     value=ik_susp_arg(argc,argv,"--save-screenshot-on-quit");
     ik_susp_copy_path(ik_suspend_png,value);
+    ik_suspend_capture_enabled = ik_suspend_png[0] != 0;
 
     for(i=1;i<argc;i++) {
         if(!ikcore_extract_clv_id(argv[i],next))continue;
