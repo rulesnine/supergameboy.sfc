@@ -13,6 +13,8 @@ on:
       - 'tools/test_ikcore_reset.py'
       - 'tools/patch_ikcore_suspend.py'
       - 'tools/test_ikcore_suspend.py'
+      - 'tools/patch_ikcore_bios_profile.py'
+      - 'tools/test_ikcore_bios_profile.py'
       - 'native_n2/ikcore_suspend.inc'
       - '.github/workflows/build-ikcore-standalone.yml'
 
@@ -181,6 +183,10 @@ jobs:
             "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
           python3 "$GITHUB_WORKSPACE/ikcore-project/tools/patch_ikcore_suspend.py" \
             "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
+          python3 "$GITHUB_WORKSPACE/ikcore-project/tools/patch_ikcore_bios_profile.py" \
+            "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
+          python3 "$GITHUB_WORKSPACE/ikcore-project/tools/test_ikcore_bios_profile.py" \
+            "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
           python3 "$GITHUB_WORKSPACE/ikcore-project/tools/test_ikcore_suspend.py" \
             "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
           python3 "$GITHUB_WORKSPACE/ikcore-project/tools/test_ikcore_reset.py" \
@@ -326,6 +332,11 @@ jobs:
           flushed on normal or signal-requested exit (TERM/INT/HUP/QUIT).
           The .7z wrapper now forwards termination to the native core and
           waits for the SRAM flush before removing temporary contents.
+          Diagnostic-only version: uses EXACT original core, BIOS clocks,
+          SPC/DSP and frame scheduler. Additional native frontend logs compare
+          BIOS versus DIRECT phases: work_ms/video_ms/nonvideo_ms, frames,
+          wall-clock duration and ALSA recovery/drop counts for each phase.
+          No gameplay/snapshot/SRAM behavior is intentionally altered.
           The physical NES Mini RESET path has been user-validated with #8.
           New (experimental): Clover suspend point state and PNG preview
           based on --save-on-quit, --save-screenshot-on-quit and
