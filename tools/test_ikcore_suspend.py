@@ -110,6 +110,9 @@ int main(int argc,char **argv) {
     char *game_args[8], *load_args[8];
     size_t j;
     if(argc!=5)return 2;
+    /* Exercise ownership flags in synthetic harness (callback is independent). */
+    if(ik_suspend_framebuffer || ik_suspend_framebuffer_capacity ||
+       ik_suspend_capture_enabled || ik_suspend_next_capture) return 2;
     for(j=0;j<sizeof fake_state;j++)fake_state[j]=(uint8_t)(j ^ 0x5a);
     ik_suspend_last_frame=pixels;
     ik_suspend_frame_width=2;
