@@ -54,7 +54,21 @@ cleanup() {
     rm -rf "$tmpdir"
 }
 trap 'cleanup' 0
-trap 'exit 130' 1 2 15
+# Forward Clover's TERM request to the native child, then wait until its
+# SRAM/ALSA/EGL cleanup has completed. No extra reset emulation is introduced.
+child_pid=
+term_requested=0
+forward_termination() {
+    term_requested=1
+    echo "RESET wrapper: solicitud de cierre recibida; avisando al núcleo" >> "$LOG"
+    if [ -n "$child_pid" ]; then
+        kill -TERM "$child_pid" 2>/dev/null || true
+    else
+        # Interrupted during extraction: no running core or cart SRAM yet.
+        exit 143
+    fi
+}
+trap 'forward_termination' 1 2 3 15
 
 # 7za is bundled in the HMOD and isolated from the core's runtime.
 if ! LD_LIBRARY_PATH="$P7LIB" "$P7ZIP" e -y "-o$tmpdir" "$archive" > "$tmpdir/7za.log" 2>&1; then
@@ -85,7 +99,19 @@ fi
 echo "SGBPACK1 extraído temporalmente: $rom" >> "$LOG"
 # Pass the verified, extracted ROM first: native argv resolver accepts it.
 # Retain Clover flags unchanged (saving, screenshot, display options).
-"$CORE" "$rom" "$@"
+"$CORE" "$rom" "$@" &
+child_pid=$!
+wait "$child_pid"
 result=$?
-echo "Ik Core salió con código $result" >> "$LOG"
+# In BusyBox ash, the first wait can return immediately when the TERM trap
+# runs. Do not remove the temp pack until the native child has really exited.
+if [ "$term_requested" -eq 1 ]; then
+    wait "$child_pid" 2>/dev/null
+    child_result=$?
+    if [ "$child_result" -ne 127 ]; then
+        result=$child_result
+    fi
+fi
+child_pid=
+echo "Ik Core salió con código $result; señal-recibida=$term_requested" >> "$LOG"
 exit "$result"
