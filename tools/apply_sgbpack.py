@@ -3181,8 +3181,15 @@ audio_step_old = """void S9xSGBPerfAudioFrame(void)
     ik_perf_smp_frac -= (double)cycles;
     if (cycles <= 0) return;
 
-    SNES::smp.clock -= cycles;
-    SNES::smp.enter();
+    // SFX port handshakes already consumed part of this exact SPC frame.
+    // Do not change frame clocks or the #117 music resampler rate.
+    const int remaining = cycles > ik_sfx_spc_cycles_advanced
+                        ? cycles - ik_sfx_spc_cycles_advanced : 0;
+    ik_sfx_spc_cycles_advanced = 0;
+    if (remaining) {
+        SNES::smp.clock -= remaining;
+        SNES::smp.enter();
+    }
     SNES::dsp.synchronize();
 }
 """
@@ -3195,29 +3202,29 @@ audio_step_new = """void S9xSGBPerfAudioFrame(void)
     ik_perf_smp_frac -= (double)cycles;
     if (cycles <= 0) return;
 
-    // This measures the isolated SPC700/DSP cost on the ARM device.
-    // Only hardware data can tell whether it fits the ~2ms PERF1 margin.
+    // SFX port handshakes already consumed part of this exact SPC frame.
+    // Do not change frame clocks or the #117 music resampler rate.
+    const int remaining = cycles > ik_sfx_spc_cycles_advanced
+                        ? cycles - ik_sfx_spc_cycles_advanced : 0;
+    ik_sfx_spc_cycles_advanced = 0;
     using IkClock = std::chrono::steady_clock;
     static uint64 frames = 0;
     static double accumulated_us = 0.0;
     static double peak_us = 0.0;
     const auto start = IkClock::now();
-
-    SNES::smp.clock -= cycles;
-    SNES::smp.enter();
+    if (remaining) {
+        SNES::smp.clock -= remaining;
+        SNES::smp.enter();
+    }
     SNES::dsp.synchronize();
-
     const auto stop = IkClock::now();
-    const double elapsed_us =
-        std::chrono::duration<double, std::micro>(stop - start).count();
+    const double elapsed_us = std::chrono::duration<double, std::micro>(stop - start).count();
     accumulated_us += elapsed_us;
     if (elapsed_us > peak_us) peak_us = elapsed_us;
-    if (++frames % 300 == 0)
-    {
+    if (++frames % 300 == 0) {
         char report[192];
         snprintf(report, sizeof report,
-                 "IKCORE SPC PROFILE: frames=%llu avg=%.3fms peak=%.3fms "
-                 "SOUND=%u SOU_TRN=%u resampler=%d",
+                 "IKCORE SPC PROFILE: frames=%llu avg=%.3fms peak=%.3fms SOUND=%u SOU_TRN=%u resampler=%d",
                  (unsigned long long)frames,
                  accumulated_us / (1000.0 * (double)frames),
                  peak_us / 1000.0,
