@@ -162,6 +162,9 @@ jobs:
           READELF="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf"
           SYSROOT="$GITHUB_WORKSPACE/xenial-sysroot"
 
+          # Embed the exact GitHub run number into BOTH log filename and header.
+          sed -i "s/__IKCORE_RUN_NUMBER__/${GITHUB_RUN_NUMBER}/g" "$GITHUB_WORKSPACE/ikcore-project/native_n2/sgbpack_native_n2.c"
+
           "$CC" \
             --sysroot="$SYSROOT" \
             -std=gnu11 -O3 -pipe \
