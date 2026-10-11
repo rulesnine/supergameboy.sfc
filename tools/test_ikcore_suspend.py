@@ -16,6 +16,11 @@ frontend = Path(sys.argv[1]).read_text(encoding="utf-8")
 start = frontend.index("/*\n * Ik Core native-only Clover suspendpoint v1.")
 end = frontend.index("\nint main(int argc, char **argv)\n{", start)
 helper = frontend[start:end]
+# The screenshot globals are declared before video_cb for native C linkage.
+# Include those same definitions in the synthetic C test harness.
+globals_start = frontend.index("static const void *ik_suspend_last_frame = NULL;")
+globals_end = frontend.index("\\nstatic void video_cb(", globals_start)
+frame_globals = frontend[globals_start:globals_end]
 
 for required in [
     "LOAD_CORE(retro_serialize_size)",
@@ -86,7 +91,7 @@ static void log_printf(const char *fmt,...) {
     va_end(ap);
 }
 '''
-    code+="\n"+extract_id+"\n"+helper+"\n"
+    code+="\n"+extract_id+"\n"+frame_globals+"\n"+helper+"\n"
     code+=r'''
 static int check(int b,const char *message) {
     if(!b){fprintf(stderr,"ASSERT: %s\n",message);return 0;}
