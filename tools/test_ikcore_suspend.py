@@ -19,7 +19,7 @@ helper = frontend[start:end]
 # The screenshot globals are declared before video_cb for native C linkage.
 # Include those same definitions in the synthetic C test harness.
 globals_start = frontend.index("static const void *ik_suspend_last_frame = NULL;")
-globals_end = frontend.index("\\nstatic void video_cb(", globals_start)
+globals_end = frontend.index("\nstatic void video_cb(", globals_start)
 frame_globals = frontend[globals_start:globals_end]
 
 for required in [
