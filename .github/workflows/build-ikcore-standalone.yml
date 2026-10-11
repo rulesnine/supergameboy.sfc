@@ -15,6 +15,8 @@ on:
       - 'tools/test_ikcore_suspend.py'
       - 'tools/patch_ikcore_bios_profile.py'
       - 'tools/test_ikcore_bios_profile.py'
+      - 'tools/patch_ikcore_bios_level1.py'
+      - 'tools/test_ikcore_bios_level1.py'
       - 'native_n2/ikcore_suspend.inc'
       - '.github/workflows/build-ikcore-standalone.yml'
 
@@ -107,6 +109,8 @@ jobs:
         run: |
           set -e
           python3 ikcore-project/tools/apply_sgbpack.py
+          python3 ikcore-project/tools/patch_ikcore_bios_level1.py supersnes9x/sgb/gb_ppu.cpp
+          python3 ikcore-project/tools/test_ikcore_bios_level1.py supersnes9x/sgb/gb_ppu.cpp
           cd supersnes9x
           git diff --check
           grep -q "Ik Core loaded SGBPACK1" memmap.cpp
@@ -332,7 +336,7 @@ jobs:
           flushed on normal or signal-requested exit (TERM/INT/HUP/QUIT).
           The .7z wrapper now forwards termination to the native core and
           waits for the SRAM flush before removing temporary contents.
-          Diagnostic-only version: uses EXACT original core, BIOS clocks,
+          Level1 experimental: retains original clocks, BIOS and SPC/DSP; changes only read-only PPU computations. BIOS profiling retained. Reference #25 remains unchanged. Diagnostic base uses original core, BIOS clocks,
           SPC/DSP and frame scheduler. Additional native frontend logs compare
           BIOS versus DIRECT phases: work_ms/video_ms/nonvideo_ms, frames,
           wall-clock duration and ALSA recovery/drop counts for each phase.
