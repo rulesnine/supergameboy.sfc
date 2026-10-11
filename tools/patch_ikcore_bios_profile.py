@@ -42,17 +42,28 @@ once('static void core_log(enum retro_log_level level, const char *fmt, ...)\n{\
 {
     const char *tag = "INFO";
     va_list ap;
-    /* Executed only on a core log message, never on ordinary frames. */
-    if (ikprof_in_run && !ikprof_direct && fmt &&
-        strstr(fmt, "IKCORE PERF2 switch: direct GB/SGB") != NULL) {
-        ikprof_direct=1;
-        ikprof_switch_wall=now_s();
-        ikprof_bios_video_at_switch=g_video_seconds;
-        ikprof_bios_late_at_switch=g_late_frames;
-        ikprof_bios_recover_at_switch=g_audio_recoveries;
-        ikprof_bios_drop_at_switch=g_audio_frames_dropped;
-        log_printf("BIOS PROFILE HANDOFF : elapsed=%.3f s, render_frames=%lu\\n",
-                   ikprof_switch_wall-ikprof_start_wall,g_video_frames);
+    /* Core often emits log_cb(RETRO_LOG_INFO, "%s", message).
+     * Checking the literal format string misses the handoff even though
+     * the expanded message is visible in the normal core[INFO] log.
+     * Render into a bounded stack buffer only for rare log messages.
+     * Preserve the ORIGINAL core log and all real-time frame behavior.
+     */
+    if (ikprof_in_run && !ikprof_direct && fmt) {
+        char ikprof_msg[512];
+        va_list ikprof_args;
+        va_start(ikprof_args, fmt);
+        vsnprintf(ikprof_msg, sizeof ikprof_msg, fmt, ikprof_args);
+        va_end(ikprof_args);
+        if (strstr(ikprof_msg, "IKCORE PERF2 switch: direct GB/SGB") != NULL) {
+            ikprof_direct=1;
+            ikprof_switch_wall=now_s();
+            ikprof_bios_video_at_switch=g_video_seconds;
+            ikprof_bios_late_at_switch=g_late_frames;
+            ikprof_bios_recover_at_switch=g_audio_recoveries;
+            ikprof_bios_drop_at_switch=g_audio_frames_dropped;
+            log_printf("BIOS PROFILE HANDOFF : elapsed=%.3f s, render_frames=%lu\\n",
+                       ikprof_switch_wall-ikprof_start_wall,g_video_frames);
+        }
     }
 ''')
 
