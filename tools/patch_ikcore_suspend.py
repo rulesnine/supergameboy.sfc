@@ -30,7 +30,18 @@ once("    LOAD_CORE(retro_run);\n",
      "    LOAD_CORE(retro_serialize_size);\n"
      "    LOAD_CORE(retro_serialize);\n"
      "    LOAD_CORE(retro_unserialize);\n")
+# The last-frame pointers must be declared BEFORE video_cb uses them.
+# The helper implementation remains after video_cb; only globals move here.
+frame_globals = (
+    "static const void *ik_suspend_last_frame = NULL;\n"
+    "static unsigned ik_suspend_frame_width = 0, ik_suspend_frame_height = 0;\n"
+    "static size_t ik_suspend_frame_pitch = 0;\n"
+)
+if body.count(frame_globals) != 1:
+    raise SystemExit("suspend globals not found exactly once")
+body = body.replace(frame_globals, "")
 once("static void video_cb(const void *data, unsigned width, unsigned height, size_t pitch)\n{\n",
+     frame_globals+
      "static void video_cb(const void *data, unsigned width, unsigned height, size_t pitch)\n{\n"
      "    if (data && width && height) {\n"
      "        ik_suspend_last_frame = data;\n"
