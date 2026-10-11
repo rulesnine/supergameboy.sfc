@@ -30,24 +30,41 @@ once("    LOAD_CORE(retro_run);\n",
      "    LOAD_CORE(retro_serialize_size);\n"
      "    LOAD_CORE(retro_serialize);\n"
      "    LOAD_CORE(retro_unserialize);\n")
-# The last-frame pointers must be declared BEFORE video_cb uses them.
-# The helper implementation remains after video_cb; only globals move here.
-frame_globals = (
-    "static const void *ik_suspend_last_frame = NULL;\n"
-    "static unsigned ik_suspend_frame_width = 0, ik_suspend_frame_height = 0;\n"
-    "static size_t ik_suspend_frame_pitch = 0;\n"
-)
-if body.count(frame_globals) != 1:
-    raise SystemExit("suspend globals not found exactly once")
-body = body.replace(frame_globals, "")
+# Declare frame-buffer ownership BEFORE video_cb uses it. Keep all expensive
+# screenshot work off the normal frame path (copy only twice per second).
+start_globals = body.index("static const void *ik_suspend_last_frame = NULL;")
+end_globals = body.index("\nstatic void ik_susp_le32", start_globals)
+frame_globals = body[start_globals:end_globals]
+body = body[:start_globals] + body[end_globals:]
 once("static void video_cb(const void *data, unsigned width, unsigned height, size_t pitch)\n{\n",
-     frame_globals+
+     frame_globals + "\n"
      "static void video_cb(const void *data, unsigned width, unsigned height, size_t pitch)\n{\n"
-     "    if (data && width && height) {\n"
-     "        ik_suspend_last_frame = data;\n"
-     "        ik_suspend_frame_width = width;\n"
-     "        ik_suspend_frame_height = height;\n"
-     "        ik_suspend_frame_pitch = pitch;\n"
+     "    if (data && ik_suspend_capture_enabled && width && height &&\n"
+     "        width <= 512 && height <= 512 && now_s() >= ik_suspend_next_capture) {\n"
+     "        size_t rowbytes = (size_t)width *\n"
+     "                ((g_pixel_format == RETRO_PIXEL_FORMAT_XRGB8888) ? 4u : 2u);\n"
+     "        size_t need = rowbytes * (size_t)height;\n"
+     "        if (pitch >= rowbytes && pitch <= 8192 && need <= 512u*512u*4u) {\n"
+     "            if (need > ik_suspend_framebuffer_capacity) {\n"
+     "                uint8_t *new_buffer = (uint8_t *)realloc(ik_suspend_framebuffer, need);\n"
+     "                if (new_buffer) {\n"
+     "                    ik_suspend_framebuffer = new_buffer;\n"
+     "                    ik_suspend_framebuffer_capacity = need;\n"
+     "                }\n"
+     "            }\n"
+     "            if (ik_suspend_framebuffer_capacity >= need) {\n"
+     "                unsigned yy;\n"
+     "                for (yy = 0; yy < height; ++yy)\n"
+     "                    memcpy(ik_suspend_framebuffer + (size_t)yy*rowbytes,\n"
+     "                           (const uint8_t *)data + (size_t)yy*pitch, rowbytes);\n"
+     "                ik_suspend_last_frame = ik_suspend_framebuffer;\n"
+     "                ik_suspend_frame_width = width;\n"
+     "                ik_suspend_frame_height = height;\n"
+     "                ik_suspend_frame_pitch = rowbytes;\n"
+     "                ik_suspend_capture_format = g_pixel_format;\n"
+     "                ik_suspend_next_capture = now_s() + 0.5;\n"
+     "            }\n"
+     "        }\n"
      "    }\n")
 once("int main(int argc, char **argv)\n{\n", body+"\nint main(int argc, char **argv)\n{\n")
 once("    ik_sram_initialize(argc, argv);\n",
