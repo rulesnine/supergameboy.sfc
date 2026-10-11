@@ -55,7 +55,36 @@ change("""\tconst SpritePixel sp = SampleSpritePixel(p, x);
 """,
        "DMG hidden-OBJ scan")
 
+# The window-enable view depends on the LCDC delay tap + m.emits only;
+# no such value is mutated in the following branch. Keep exactly the
+# original sample point and reuse its result for both read-only predicates.
+change("""\t\t{
+\t\t\tconst bool win_en_now = WinEnView(p, m);
+\t\t\tif (m.win_en_prev && !win_en_now && m.win_fresh)
+\t\t\t\tm.win_insert_disable = true;
+\t\t\tm.win_en_prev = win_en_now;
+\t\t}
+\t\t// How far into the tile""",
+       """\t\tconst bool win_en_now = WinEnView(p, m);
+\t\tif (m.win_en_prev && !win_en_now && m.win_fresh)
+\t\t\tm.win_insert_disable = true;
+\t\tm.win_en_prev = win_en_now;
+\t\t// How far into the tile""",
+       "reuse window-enable sample")
+
+change("""\t\tif (!p.cgb && m.fetch_is_window && !WinEnView(p, m) &&
+\t\t    m.obj_fetch_state == 0 && m.fetch_stage <= wks)""",
+       """\t\tif (!p.cgb && m.fetch_is_window && !win_en_now &&
+\t\t    m.obj_fetch_state == 0 && m.fetch_stage <= wks)""",
+       "window kill predicate")
+
+change("""\t\tif (!p.cgb && !m.fetch_is_window && !WinEnView(p, m) &&
+\t\t    !m.win_activated_line && p.wy_triggered &&""",
+       """\t\tif (!p.cgb && !m.fetch_is_window && !win_en_now &&
+\t\t    !m.win_activated_line && p.wy_triggered &&""",
+       "window catch-up predicate")
+
 assert src!=original
 assert src.count("static_cast<unsigned>(x - sx) >= 8u")==2
 p.write_text(src,encoding="utf-8")
-print("IKCORE LEVEL1: redundant hidden-sprite scans removed in DMG/CGB; pixel/clock logic unchanged.")
+print("IKCORE LEVEL1: discarded sprite scans + repeated window-register reads optimized; pixel/clock logic unchanged.")
