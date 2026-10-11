@@ -182,7 +182,7 @@ jobs:
           python3 "$GITHUB_WORKSPACE/ikcore-project/tools/test_ikcore_sram.py" \
             "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
           sed -i "s/__IKCORE_RUN_NUMBER__/${GITHUB_RUN_NUMBER}/g" "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
-          grep -Fq 'while (!g_shutdown_requested && !g_swap_failed)' "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
+          grep -Fq 'while (!g_shutdown_requested && !g_swap_failed && !ik_exit_signal)' "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
           grep -Fq 'return NULL;' "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
 
           "$CC" \
