@@ -3619,23 +3619,37 @@ static void IkApplySoundEvents()
     {
         if (e.type == 0)
         {
-            if (e.data[0] == 0x12 && ik_last_sfx_a == 0x12 &&
-                ik_sfx_spc_cycles_advanced < 4096)
+            // Isolated KOF96 hypothesis test: remap only the observed
+            // repeated A=12 B=00 attr=07 score=00 text-sequence packet to
+            // the SGB built-in B=18 (Writing). This is NOT a permanent fix.
+            // Every other SGB effect, its attributes, SNES music command,
+            // SPC threading and PCM rate-lock remain as in build #132.
+            const bool writing_b18_test =
+                (e.data[0] == 0x12 && e.data[1] == 0x00 &&
+                 e.data[2] == 0x07 && e.data[3] == 0x00);
+
+            if (writing_b18_test)
             {
-                // The #127 zero and 0x12 were written back-to-back. SPC700
-                // never ran between them, so the restart was invisible.
-                // Let the original N-SPC driver read the zero BEFORE 0x12.
-                // Advance within this frame's SPC budget, not extra cycles.
                 SNES::cpu.port_write(1, 0x00);
-                SNES::smp.clock -= 1024;
-                SNES::smp.enter();
-                ik_sfx_spc_cycles_advanced += 1024;
+                SNES::cpu.port_write(2, 0x18);
             }
-            SNES::cpu.port_write(1, e.data[0]);
-            SNES::cpu.port_write(2, e.data[1]);
+            else
+            {
+                if (e.data[0] == 0x12 && ik_last_sfx_a == 0x12 &&
+                    ik_sfx_spc_cycles_advanced < 4096)
+                {
+                    // Unmodified #132 retrigger for other SOUND packets.
+                    SNES::cpu.port_write(1, 0x00);
+                    SNES::smp.clock -= 1024;
+                    SNES::smp.enter();
+                    ik_sfx_spc_cycles_advanced += 1024;
+                }
+                SNES::cpu.port_write(1, e.data[0]);
+                SNES::cpu.port_write(2, e.data[1]);
+            }
             SNES::cpu.port_write(3, e.data[2]);
             SNES::cpu.port_write(0, e.data[3]);
-            ik_last_sfx_a = e.data[0];
+            ik_last_sfx_a = writing_b18_test ? 0x00 : e.data[0];
             ++ik_perf_sound_commands;
         }
         else if (e.type == 1 && e.transfer.size() == 4096)
