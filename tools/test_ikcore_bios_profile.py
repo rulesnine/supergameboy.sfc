@@ -45,7 +45,7 @@ assert "ikprof_direct=1;" in c
 # Snes9x wraps most log messages in "%s"; the original profiler inspected
 # fmt itself and therefore never detected the phase transition.
 b=c.index("static void core_log(enum retro_log_level level, const char *fmt, ...)")
-e=c.index("\\nstatic int get_fb_size(",b)
+e=c.index("\nstatic int get_fb_size(",b)
 log_function=c[b:e]
 assert "vsnprintf(ikprof_msg, sizeof ikprof_msg, fmt, ikprof_args)" in log_function
 mock = r'''
@@ -91,7 +91,7 @@ int main(void) {
 with tempfile.TemporaryDirectory(prefix="ikcore-profiler-fmt-") as d:
     src=Path(d)/"profiler_fmt.c"
     exe=Path(d)/"profiler_fmt"
-    src.write_text(mock + "\\n" + log_function + "\\n" + main,encoding="utf-8")
+    src.write_text(mock + "\n" + log_function + "\n" + main,encoding="utf-8")
     subprocess.run(["gcc","-std=gnu11","-O2","-Wall","-Wextra",
                     "-Werror",str(src),"-o",str(exe)],check=True)
     subprocess.run([str(exe)],check=True)
