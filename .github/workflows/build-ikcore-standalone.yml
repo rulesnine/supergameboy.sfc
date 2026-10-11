@@ -6,6 +6,7 @@ on:
     paths:
       - 'tools/prepare_ikcore_standalone.py'
       - 'tools/patch_ikcore_hakchi_loader.py'
+      - 'native_n2/ikcore_hakchi_launcher.sh'
       - '.github/workflows/build-ikcore-standalone.yml'
 
 permissions:
@@ -64,7 +65,7 @@ jobs:
                 > /etc/apt/sources.list
               apt-get update
               cd /out
-              apt-get download libc6:armhf libc6-dev:armhf linux-libc-dev:armhf
+              apt-get download libc6:armhf libc6-dev:armhf linux-libc-dev:armhf p7zip-full:armhf libstdc++6:armhf libgcc1:armhf
             '
 
           for pkg in "$GITHUB_WORKSPACE"/xenial-debs/*.deb; do
@@ -74,6 +75,9 @@ jobs:
           test -e "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6"
           test -e "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libdl.so.2"
           test -e "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6"
+          test -x "$GITHUB_WORKSPACE/xenial-sysroot/usr/lib/p7zip/7za"
+          test -e "$GITHUB_WORKSPACE/xenial-sysroot/usr/lib/arm-linux-gnueabihf/libstdc++.so.6"
+          test -e "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libgcc_s.so.1"
           test -e "$GITHUB_WORKSPACE/xenial-sysroot/usr/include/stdio.h"
           strings "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6" | grep -q "GLIBC_2.23"
 
@@ -207,17 +211,30 @@ jobs:
         run: |
           set -e
           rm -rf ikcore-standalone-stage
-          mkdir -p ikcore-standalone-stage/bin ikcore-standalone-stage/usr/lib/ikcore-standalone
+          mkdir -p ikcore-standalone-stage/bin ikcore-standalone-stage/usr/lib/ikcore-standalone/lib
 
           cp dist/ikcore-standalone-native ikcore-standalone-stage/usr/lib/ikcore-standalone/ikcore-standalone-native
           cp dist/ikcore_sgbpack_libretro.so ikcore-standalone-stage/usr/lib/ikcore-standalone/ikcore_sgbpack_libretro.so
           chmod 755 ikcore-standalone-stage/usr/lib/ikcore-standalone/ikcore-standalone-native
 
-          cat > ikcore-standalone-stage/bin/ikcore <<'EOF'
-          #!/bin/sh
-          exec /usr/lib/ikcore-standalone/ikcore-standalone-native "$@"
-          EOF
+          # Bundle ARMhf 7za plus its exact Xenial C++ runtime. Do not depend
+          # on globally installed Hakchi/RetroArch modules or change core ABI.
+          cp "$GITHUB_WORKSPACE/xenial-sysroot/usr/lib/p7zip/7za" ikcore-standalone-stage/usr/lib/ikcore-standalone/7za
+          cp "$GITHUB_WORKSPACE/xenial-sysroot/usr/lib/arm-linux-gnueabihf/libstdc++.so.6" ikcore-standalone-stage/usr/lib/ikcore-standalone/lib/
+          cp "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libgcc_s.so.1" ikcore-standalone-stage/usr/lib/ikcore-standalone/lib/
+          chmod 755 ikcore-standalone-stage/usr/lib/ikcore-standalone/7za
+          chmod 755 ikcore-standalone-stage/usr/lib/ikcore-standalone/lib/*.so*
+          "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf" -h ikcore-standalone-stage/usr/lib/ikcore-standalone/7za | grep -q 'Machine:.*ARM'
+          "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf" -V ikcore-standalone-stage/usr/lib/ikcore-standalone/7za > dist/7ZA-VERIFY.txt
+          if grep -Eq 'GLIBC_2\\.(2[4-9]|[3-9][0-9])' dist/7ZA-VERIFY.txt; then
+            echo "7za requires GLIBC newer than NES Mini Xenial" >&2
+            exit 1
+          fi
+
+          sed "s/__IKCORE_RUN_NUMBER__/${GITHUB_RUN_NUMBER}/g" \
+            ikcore-project/native_n2/ikcore_hakchi_launcher.sh > ikcore-standalone-stage/bin/ikcore
           chmod 755 ikcore-standalone-stage/bin/ikcore
+          sh -n ikcore-standalone-stage/bin/ikcore
 
           cat > ikcore-standalone-stage/install <<'EOF'
           #!/bin/sh
@@ -225,6 +242,11 @@ jobs:
           copy "./bin/ikcore" "$rootfs/bin/ikcore"
           copy "./usr/lib/ikcore-standalone/ikcore-standalone-native" "$rootfs/usr/lib/ikcore-standalone/ikcore-standalone-native"
           copy "./usr/lib/ikcore-standalone/ikcore_sgbpack_libretro.so" "$rootfs/usr/lib/ikcore-standalone/ikcore_sgbpack_libretro.so"
+          mkdir -p "$rootfs/usr/lib/ikcore-standalone/lib"
+          copy "./usr/lib/ikcore-standalone/7za" "$rootfs/usr/lib/ikcore-standalone/7za"
+          copy "./usr/lib/ikcore-standalone/lib/libstdc++.so.6" "$rootfs/usr/lib/ikcore-standalone/lib/libstdc++.so.6"
+          copy "./usr/lib/ikcore-standalone/lib/libgcc_s.so.1" "$rootfs/usr/lib/ikcore-standalone/lib/libgcc_s.so.1"
+          chmod +x "$rootfs/usr/lib/ikcore-standalone/7za"
           chmod +x "$rootfs/bin/ikcore"
           chmod +x "$rootfs/usr/lib/ikcore-standalone/ikcore-standalone-native"
           copy "./usr/lib/ikcore-standalone/build.txt" "$rootfs/usr/lib/ikcore-standalone/build.txt"
@@ -236,6 +258,10 @@ jobs:
           rm -f "$rootfs/usr/lib/ikcore-standalone/ikcore-standalone-native"
           rm -f "$rootfs/usr/lib/ikcore-standalone/ikcore_sgbpack_libretro.so"
           rm -f "$rootfs/usr/lib/ikcore-standalone/build.txt"
+          rm -f "$rootfs/usr/lib/ikcore-standalone/7za"
+          rm -f "$rootfs/usr/lib/ikcore-standalone/lib/libstdc++.so.6"
+          rm -f "$rootfs/usr/lib/ikcore-standalone/lib/libgcc_s.so.1"
+          rmdir "$rootfs/usr/lib/ikcore-standalone/lib" 2>/dev/null || true
           rmdir "$rootfs/usr/lib/ikcore-standalone" 2>/dev/null || true
           EOF
 
@@ -253,7 +279,12 @@ jobs:
           the previously validated /bin/sgbpack-native (#137).
 
           New launcher: /bin/ikcore
-          Tested input format: SGBPACK1 (.sfc/.smc), generated with the
+          Tested input format: SGBPACK1 (.sfc/.smc), either original or
+          compressed by Hakchi as .sfc.7z / .smc.7z. The wrapper extracts
+          the selected game to temporary storage and removes it on exit.
+          Wrapper log:
+            /var/lib/hakchi/sgb-native-test/ikcore-standalone-<run>-wrapper.log
+          Generated with the
           Ik Core SGBPACK Builder using the legally obtained SGB BIOS and GB ROM.
           Ordinary .gb/.gbc, plain SNES .sfc, and .zip/.7z are NOT verified
           as #137-equivalent inputs; do not assign those without conversion.
