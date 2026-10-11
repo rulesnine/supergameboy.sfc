@@ -72,16 +72,12 @@ change("""\t\t{
 \t\t// How far into the tile""",
        "reuse window-enable sample")
 
-change("""\t\tif (!p.cgb && m.fetch_is_window && !WinEnView(p, m) &&
-\t\t    m.obj_fetch_state == 0 && m.fetch_stage <= wks)""",
-       """\t\tif (!p.cgb && m.fetch_is_window && !win_en_now &&
-\t\t    m.obj_fetch_state == 0 && m.fetch_stage <= wks)""",
+change("if (!p.cgb && m.fetch_is_window && !WinEnView(p, m) &&",
+       "if (!p.cgb && m.fetch_is_window && !win_en_now &&",
        "window kill predicate")
 
-change("""\t\tif (!p.cgb && !m.fetch_is_window && !WinEnView(p, m) &&
-\t\t    !m.win_activated_line && p.wy_triggered &&""",
-       """\t\tif (!p.cgb && !m.fetch_is_window && !win_en_now &&
-\t\t    !m.win_activated_line && p.wy_triggered &&""",
+change("if (!p.cgb && !m.fetch_is_window && !WinEnView(p, m) &&",
+       "if (!p.cgb && !m.fetch_is_window && !win_en_now &&",
        "window catch-up predicate")
 
 assert src!=original
