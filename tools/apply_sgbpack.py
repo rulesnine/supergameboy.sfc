@@ -3634,8 +3634,14 @@ static inline void IkSgbWriteSoundPorts(const uint8_t *p)
 
 static void IkApplySoundEvents()
 {
-    // The input FIFO is already guarded by the existing threaded frame
-    // handoff, so only this worker touches the saved echo/pending state.
+    // Retain the entire GB-produced FIFO BEFORE possibly returning on a
+    // missing SPC acknowledgement; EndFrame clears ik_audio_dispatch.
+    // Swapping at the start is essential so no KOF96 sound packet is lost.
+    std::vector<IkSgbSoundEvent> work;
+    work.swap(ik_audio_deferred);
+    for (auto &e : ik_audio_dispatch)
+        work.emplace_back(std::move(e));
+
     if (ik_sgb_waiting_for_echo)
     {
         const bool acknowledged =
@@ -3650,6 +3656,7 @@ static void IkApplySoundEvents()
             // once per frame until the SPC program echoes them.
             IkSgbWriteSoundPorts(ik_sgb_last_sound_ports);
             ++ik_sgb_echo_wait_frames;
+            ik_audio_deferred.swap(work);
             return;
         }
         ik_sgb_waiting_for_echo = false;
@@ -3659,11 +3666,6 @@ static void IkApplySoundEvents()
     // At most one new SOUND transaction per frame, matching the firmware's
     // $00:BAD6 stage-and-send path instead of overwriting 4 input latches
     // with multiple effect commands during a single SPC poll interval.
-    std::vector<IkSgbSoundEvent> work;
-    work.swap(ik_audio_deferred);
-    for (auto &e : ik_audio_dispatch)
-        work.emplace_back(std::move(e));
-
     if (work.empty())
         return;
 
