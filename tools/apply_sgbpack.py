@@ -3595,6 +3595,9 @@ struct IkSgbSoundEvent
 };
 static std::vector<IkSgbSoundEvent> ik_audio_pending;
 static std::vector<IkSgbSoundEvent> ik_audio_dispatch;
+// SPC-worker-only backlog: never collapse two SGB SOUND packets into one
+// CPU->SPC input latch update within a single SPC polling interval.
+static std::vector<IkSgbSoundEvent> ik_audio_deferred;
 static pthread_t ik_audio_tid;
 static pthread_mutex_t ik_audio_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t ik_audio_cv = PTHREAD_COND_INITIALIZER;
@@ -3604,42 +3607,57 @@ static bool ik_audio_requested = false;
 static bool ik_audio_done = true;
 static bool ik_audio_frame_active = false;
 static bool ik_audio_warned = false;
-// SFX-only diagnostic. No change to SPC scheduling, mixer, GB frame timing,
-// PCM rate-lock or the original sound-command dispatch sequence.
-// SGB BIOS uses zero as an explicit effect re-trigger/dummy flag.
-// KOF repeatedly sends the SAME A=0x12 sound while the text is drawn.
-// Preserve the approved #117 threaded-SPC scheduling and original PCM mixer;
-// re-arm only successive identical nonzero A=0x12 commands. Other sounds,
-// port 2 (B effects), attributes and port 0 (music) stay byte-identical.
-static uint8_t ik_last_sfx_a = 0;
-
+// Preserve the original SGB SOUND payload, including A/B dummy flags (00).
+// The SPC input ports are latches, not a command queue. Consecutive writes
+// without allowing SMP execution caused intermediate packets to disappear.
+// Advance the existing frame's SMP clock between different SOUND packets.
+// Up to four SOUND packets run per 60.1 Hz frame; excess packets are carried
+// FIFO to the next frame instead of overwriting a register or running fast.
+// NO synthetic A=12 retrigger and NO B=18 sound substitution.
 static void IkApplySoundEvents()
 {
-    for (const auto &e : ik_audio_dispatch)
+    std::vector<IkSgbSoundEvent> work;
+    work.swap(ik_audio_deferred);
+    for (auto &event : ik_audio_dispatch)
+        work.emplace_back(std::move(event));
+
+    static const unsigned kMaxSoundPacketsPerFrame = 4;
+    static const int kSmpCyclesBetweenSoundPackets = 4096;
+    unsigned sound_packets = 0;
+
+    for (size_t i = 0; i < work.size(); ++i)
     {
+        const auto &e = work[i];
         if (e.type == 0)
         {
-            if (e.data[0] == 0x12 && ik_last_sfx_a == 0x12 &&
-                ik_sfx_spc_cycles_advanced < 4096)
+            if (sound_packets == kMaxSoundPacketsPerFrame)
             {
-                // The #127 zero and 0x12 were written back-to-back. SPC700
-                // never ran between them, so the restart was invisible.
-                // Let the original N-SPC driver read the zero BEFORE 0x12.
-                // Advance within this frame's SPC budget, not extra cycles.
-                SNES::cpu.port_write(1, 0x00);
-                SNES::smp.clock -= 1024;
-                SNES::smp.enter();
-                ik_sfx_spc_cycles_advanced += 1024;
+                for (; i < work.size(); ++i)
+                    ik_audio_deferred.emplace_back(std::move(work[i]));
+                break;
             }
+
+            if (sound_packets > 0)
+            {
+                // 3 * 4096 <= 17038 SPC cycles/frame. The remaining cycles
+                // run in S9xSGBPerfAudioFrame, preserving #117 clock and pitch.
+                SNES::smp.clock -= kSmpCyclesBetweenSoundPackets;
+                SNES::smp.enter();
+                ik_sfx_spc_cycles_advanced += kSmpCyclesBetweenSoundPackets;
+            }
+            // Every byte belongs to the GB game. In particular, preserve
+            // the game's explicit 00 dummy flags for proper re-triggering.
             SNES::cpu.port_write(1, e.data[0]);
             SNES::cpu.port_write(2, e.data[1]);
             SNES::cpu.port_write(3, e.data[2]);
             SNES::cpu.port_write(0, e.data[3]);
-            ik_last_sfx_a = e.data[0];
+            ++sound_packets;
             ++ik_perf_sound_commands;
         }
         else if (e.type == 1 && e.transfer.size() == 4096)
+        {
             S9xSGBPerfSouTrnApply(e.transfer.data());
+        }
     }
 }
 
@@ -3748,7 +3766,7 @@ void S9xSGBPerfAudioShutdown(void)
         pthread_join(ik_audio_tid, nullptr);
         ik_audio_thread_ready = false;
     }
-    ik_last_sfx_a = 0;
+    ik_audio_deferred.clear();
     ik_sfx_spc_cycles_advanced = 0;
     ik_audio_pending.clear();
     ik_audio_dispatch.clear();
