@@ -377,10 +377,24 @@ static void ik_suspend_initialize(int argc,char **argv,const char *pack_path)
         log_printf("SUSP LOAD    : no hay punto válido, inicia juego normalmente.\n");
         return;
     }
-    if(core_retro_unserialize(snapshot,size))
+    if(core_retro_unserialize(snapshot,size)) {
+        /* A suspendpoint can contain older cart SRAM than the permanent
+         * .srm. Reset the comparison baseline to the restored RAM so the
+         * 5-second autosaver will NOT silently overwrite an existing, newer
+         * cartridge save merely because a suspendpoint was loaded.
+         * A subsequent real in-game save changes SRAM and persists normally.
+         */
+        if(ik_sram_shadow && !ik_sram_disabled) {
+            size_t ram_size=core_retro_get_memory_size(RETRO_MEMORY_SAVE_RAM);
+            void *ram=core_retro_get_memory_data(RETRO_MEMORY_SAVE_RAM);
+            if(ram && ram_size==ik_sram_size) {
+                memcpy(ik_sram_shadow,ram,ram_size);
+                log_printf("SUSP SRAM    : cartucho protegido hasta nuevo guardado interno.\n");
+            }
+        }
         log_printf("SUSP LOAD OK : %zu bytes restaurados desde %s\n",
                    size,ik_suspend_input);
-    else
+    } else
         log_printf("SUSP LOAD    : el núcleo rechazó el estado, inicia normalmente.\n");
     free(snapshot);
 }
