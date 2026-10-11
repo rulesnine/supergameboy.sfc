@@ -27,6 +27,8 @@ for required in [
     "LOAD_CORE(retro_serialize)",
     "LOAD_CORE(retro_unserialize)",
     "ik_suspend_initialize(argc, argv, pack_path)",
+    "ik_suspend_maybe_restore();",
+    "ik_suspend_finish();",
     "if (game_loaded) ik_suspend_save();",
     "if (game_loaded) ik_sram_flush(1);",
 ]:
@@ -69,7 +71,15 @@ static int g_pixel_format=RETRO_PIXEL_FORMAT_RGB565;
 static unsigned long g_video_frames=1;
 static uint8_t fake_state[128];
 static int load_count=0;
-static size_t fake_serialize_size(void) { return sizeof(fake_state); }
+static int fake_direct_mode=1;
+static size_t fake_serialize_size(void) {
+    return fake_direct_mode ? sizeof(fake_state) : 256u;
+}
+static void fake_set_sgb_header(void) {
+    memcpy(fake_state,"SGB!",4);
+    fake_state[4]=11;fake_state[5]=fake_state[6]=fake_state[7]=0;
+    fake_state[8]=116;fake_state[9]=fake_state[10]=fake_state[11]=0;
+}
 static bool fake_serialize(void *data,size_t len) {
     if(len!=sizeof fake_state)return false;
     memcpy(data,fake_state,len);
@@ -115,6 +125,7 @@ int main(int argc,char **argv) {
        ik_suspend_capture_enabled || ik_suspend_next_capture ||
        g_pixel_format != RETRO_PIXEL_FORMAT_RGB565) return 2;
     for(j=0;j<sizeof fake_state;j++)fake_state[j]=(uint8_t)(j ^ 0x5a);
+    fake_set_sgb_header();
     ik_suspend_last_frame=pixels;
     ik_suspend_frame_width=2;
     ik_suspend_frame_height=2;
@@ -149,19 +160,32 @@ int main(int argc,char **argv) {
     load_args[5]="--save-data-backing-file";
     load_args[6]="/var/lib/clover/profiles/0/CLV-U-BVEMA/save.sram";
     load_args[7]=NULL;
+    fake_direct_mode=0; /* BIOS phase: the SGB direct state is not yet valid */
     ik_suspend_initialize(7,load_args,argv[1]);
-    if(!check(load_count==1,"state restored by Clover arg") ||
-       !check(fake_state[3]==(uint8_t)(3 ^ 0x5a),"serialized bytes restored"))
+    if(!check(load_count==0 && ik_suspend_pending,
+              "valid state deferred until core switches from BIOS"))return 5;
+    ik_suspend_probe_at=0.0;
+    ik_suspend_maybe_restore();
+    if(!check(load_count==0 && ik_suspend_pending,
+              "SNES BIOS serializer never receives GB state"))return 5;
+    fake_direct_mode=1;
+    fake_set_sgb_header(); /* same core now switched into direct SGB */
+    ik_suspend_probe_at=0.0;
+    ik_suspend_maybe_restore();
+    if(!check(load_count==1 && !ik_suspend_pending,
+              "state restored only after SGB mode switch") ||
+       !check(fake_state[17]==(uint8_t)(17 ^ 0x5a),"serialized bytes restored"))
         return 5;
+    ik_suspend_finish();
     /* A different binary assigned to the same CLV game must NOT load it. */
     memset(fake_state,0,sizeof fake_state);
     load_count=0;
     ik_suspend_ready=0;
     memset(ik_suspend_clv,0,sizeof ik_suspend_clv);
     ik_suspend_initialize(7,load_args,argv[4]);
-    if(!check(load_count==0,"different ROM rejected") ||
-       !check(fake_state[3]==0,"unchanged fresh state"))return 6;
-    puts("SUSPEND C SMOKE: PASS (save/load/ID+ROM validation/screenshot)");
+    if(!check(load_count==0 && !ik_suspend_pending,"different ROM rejected") ||
+       !check(fake_state[17]==0,"unchanged fresh state"))return 6;
+    puts("SUSPEND C SMOKE: PASS (BIOS wait, SGB resume, ID+ROM validation, PNG)");
     return 0;
 }
 '''
