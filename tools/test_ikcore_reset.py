@@ -24,7 +24,11 @@ assert "ik_exit_handlers_install()" in native
 assert 'ik_exit_signal ? ik_exit_signal_name' in native
 
 start = native.index("/* Clover may terminate")
-end = native.index("\nint main(int argc, char **argv)\n{", start)
+# Isolate precisely the RESET signal implementation: optional future helpers
+# (Clover suspendpoint) belong to their own dedicated smoke test.
+next_helper = native.find("/*\n * Ik Core native-only Clover suspendpoint v1.", start)
+end = (next_helper if next_helper >= 0 else
+       native.index("\nint main(int argc, char **argv)\n{", start))
 signal_impl = native[start:end]
 with tempfile.TemporaryDirectory(prefix="ikcore-reset-test-") as tmp:
     root = Path(tmp)
