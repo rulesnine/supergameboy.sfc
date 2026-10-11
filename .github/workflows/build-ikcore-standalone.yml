@@ -1,0 +1,287 @@
+name: Build Ik Core 137 Standalone Hakchi (NO DEVICE TEST)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/prepare_ikcore_standalone.py'
+      - '.github/workflows/build-ikcore-standalone.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout Ik Core project
+        uses: actions/checkout@v4
+        with:
+          path: ikcore-project
+
+      - name: Checkout pinned SuperSnes9x
+        uses: actions/checkout@v4
+        with:
+          repository: shanytc/snes9x
+          ref: 183e03e5efed3b6d450385c98e2ccffb194153c3
+          submodules: false
+          path: supersnes9x
+
+      - name: Run private-ROM auditor tests (synthetic, no ROM distributed)
+        run: python3 ikcore-project/tools/test_sgbpack_audit.py
+
+      - name: Check SGB direct-mode PCM output clock and long-term drift
+        run: python3 ikcore-project/tools/test_audio_rate_lock.py
+
+      - name: Install host tools
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y file dpkg-dev bc
+
+      - name: Checkout known-good Linaro GCC 7 ARMhf toolchain
+        uses: actions/checkout@v4
+        with:
+          repository: MayuriLabs/linaro_arm-linux-gnueabihf-7.5
+          ref: master
+          path: toolchain
+          fetch-depth: 1
+
+      - name: Prepare Xenial ARMhf GLIBC 2.23 sysroot
+        run: |
+          set -e
+          mkdir -p "$GITHUB_WORKSPACE/xenial-debs" "$GITHUB_WORKSPACE/xenial-sysroot"
+
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/xenial-debs:/out" \
+            ubuntu:16.04 bash -ec '
+              printf "%s\n" \
+                "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial main universe" \
+                "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial-updates main universe" \
+                "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial-security main universe" \
+                > /etc/apt/sources.list
+              apt-get update
+              cd /out
+              apt-get download libc6:armhf libc6-dev:armhf linux-libc-dev:armhf
+            '
+
+          for pkg in "$GITHUB_WORKSPACE"/xenial-debs/*.deb; do
+            dpkg-deb -x "$pkg" "$GITHUB_WORKSPACE/xenial-sysroot"
+          done
+
+          test -e "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6"
+          test -e "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libdl.so.2"
+          test -e "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6"
+          test -e "$GITHUB_WORKSPACE/xenial-sysroot/usr/include/stdio.h"
+          strings "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6" | grep -q "GLIBC_2.23"
+
+          mkdir -p "$GITHUB_WORKSPACE/wrappers"
+          cat > "$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc" <<'EOF'
+          #!/bin/sh
+          exec "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc" --sysroot="$GITHUB_WORKSPACE/xenial-sysroot" "$@"
+          EOF
+          cat > "$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++" <<'EOF'
+          #!/bin/sh
+          exec "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-g++" --sysroot="$GITHUB_WORKSPACE/xenial-sysroot" -std=gnu++17 "$@"
+          EOF
+          chmod +x "$GITHUB_WORKSPACE"/wrappers/*
+          "$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc" -dumpversion
+          "$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++" -dumpversion
+
+      - name: Apply SGBPACK integration
+        run: |
+          set -e
+          python3 ikcore-project/tools/apply_sgbpack.py
+          cd supersnes9x
+          git diff --check
+          grep -q "Ik Core loaded SGBPACK1" memmap.cpp
+          grep -q 'IKCORE_SGB_PERF_AUDIO_RATE_LOCK' sgb/sgb.cpp
+
+      - name: Build PERF2 parallel SPC with rate-locked GB APU direct SGB core for ARMv7
+        working-directory: supersnes9x/libretro
+        run: |
+          set -e
+          make clean || true
+          make -j2 \
+            platform=classic_armv7_a7 \
+            CC="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc" \
+            CXX="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++ -fno-threadsafe-statics -fno-semantic-interposition -pthread" \
+            AR="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar" \
+            STRIP="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-strip" \
+            HAVE_UNZIP=0 \
+            CPPFLAGS="-DSGBPACK_LITE -DIKCORE_GB_FAST_IDLE -DIKCORE_PPU_IDLE_FAST -DIKCORE_MBC5_FAST -DIKCORE_FIXED_ACID_KNOBS -DIKCORE_SGB_PERF_PPU -DIKCORE_SGB_HYBRID_AUDIO -DIKCORE_SGB_LAZY_APU -DIKCORE_SGB_PERF_AUDIO_THREADED -DIKCORE_SGB_PERF_AUDIO_RATE_LOCK" \
+            LDFLAGS="-flto=4 -pthread -static-libgcc -static-libstdc++" \
+            LIBS="$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6"
+
+      - name: Verify and stage PERF2 parallel SPC with rate-locked GB APU SGB core
+        working-directory: supersnes9x/libretro
+        run: |
+          set -e
+          READELF="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf"
+          STRIP="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-strip"
+          CORE=supersnes9x_libretro.so
+          test -f "$CORE"
+
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          {
+            echo "=== CORE file ==="
+            file "$CORE"
+            echo "=== CORE ELF ==="
+            "$READELF" -h "$CORE"
+            echo "=== CORE dynamic ==="
+            "$READELF" -d "$CORE"
+            echo "=== CORE versions ==="
+            "$READELF" -V "$CORE"
+          } | tee "$GITHUB_WORKSPACE/dist/CORE-VERIFY.txt"
+
+          file "$CORE" | grep -q "ELF 32-bit"
+          "$READELF" -h "$CORE" | grep -q "Machine:.*ARM"
+          "$READELF" -h "$CORE" | grep -q "hard-float ABI"
+
+          if "$READELF" -V "$CORE" | grep -Eq 'GLIBC_2\.(2[4-9]|[3-9][0-9])'; then
+            echo "ERROR: core requires GLIBC newer than 2.23"
+            exit 1
+          fi
+
+          echo "CORE MODE: UNVERIFIED - 32040Hz direct APU rate lock + parallel SPC; graphics and fade unchanged" >> "$GITHUB_WORKSPACE/dist/CORE-VERIFY.txt"
+          cp "$CORE" "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so"
+          "$STRIP" --strip-unneeded "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so"
+          sha256sum "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so" > "$GITHUB_WORKSPACE/dist/SHA256-core.txt"
+
+      - name: Build PERF2 parallel SPC with rate-locked GB APU EGL frontend
+        run: |
+          set -e
+          CC="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc"
+          STRIP="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-strip"
+          READELF="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf"
+          SYSROOT="$GITHUB_WORKSPACE/xenial-sysroot"
+
+          # Copy the #137 source, change ONLY the launcher: no KOF default
+          # image and no 120-second benchmark timeout.
+          python3 "$GITHUB_WORKSPACE/ikcore-project/tools/prepare_ikcore_standalone.py" \
+            "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
+          sed -i "s/__IKCORE_RUN_NUMBER__/${GITHUB_RUN_NUMBER}/g" "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
+          grep -Fq 'while (!g_shutdown_requested && !g_swap_failed)' "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
+          grep -Fq 'return NULL;' "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
+
+          "$CC" \
+            --sysroot="$SYSROOT" \
+            -std=gnu11 -O3 -pipe \
+            -march=armv7-a -mtune=cortex-a7 \
+            -mfpu=neon-vfpv4 -mfloat-abi=hard \
+            -D_FILE_OFFSET_BITS=64 \
+            -I"$GITHUB_WORKSPACE/supersnes9x/libretro" \
+            "$GITHUB_WORKSPACE/dist/ikcore_standalone.c" \
+            -o "$GITHUB_WORKSPACE/dist/ikcore-standalone-native" \
+            -Wl,-rpath-link,"$SYSROOT/lib/arm-linux-gnueabihf" \
+            "$SYSROOT/lib/arm-linux-gnueabihf/libdl.so.2"
+
+          {
+            echo "=== FRONTEND file ==="
+            file "$GITHUB_WORKSPACE/dist/ikcore-standalone-native"
+            echo "=== FRONTEND ELF ==="
+            "$READELF" -h "$GITHUB_WORKSPACE/dist/ikcore-standalone-native"
+            echo "=== FRONTEND dynamic ==="
+            "$READELF" -d "$GITHUB_WORKSPACE/dist/ikcore-standalone-native"
+            echo "=== FRONTEND versions ==="
+            "$READELF" -V "$GITHUB_WORKSPACE/dist/ikcore-standalone-native"
+          } | tee "$GITHUB_WORKSPACE/dist/FRONTEND-VERIFY.txt"
+
+          file "$GITHUB_WORKSPACE/dist/ikcore-standalone-native" | grep -q "ELF 32-bit"
+          "$READELF" -h "$GITHUB_WORKSPACE/dist/ikcore-standalone-native" | grep -q "Machine:.*ARM"
+          "$READELF" -h "$GITHUB_WORKSPACE/dist/ikcore-standalone-native" | grep -q "hard-float ABI"
+
+          if "$READELF" -V "$GITHUB_WORKSPACE/dist/ikcore-standalone-native" | grep -Eq 'GLIBC_2\.(2[4-9]|[3-9][0-9])'; then
+            echo "ERROR: frontend requires GLIBC newer than 2.23"
+            exit 1
+          fi
+
+          "$STRIP" --strip-unneeded "$GITHUB_WORKSPACE/dist/ikcore-standalone-native"
+          sha256sum "$GITHUB_WORKSPACE/dist/ikcore-standalone-native" > "$GITHUB_WORKSPACE/dist/SHA256-frontend.txt"
+
+      - name: Package independent Ik Core Hakchi HMOD
+        run: |
+          set -e
+          rm -rf ikcore-standalone-stage
+          mkdir -p ikcore-standalone-stage/bin ikcore-standalone-stage/usr/lib/ikcore-standalone
+
+          cp dist/ikcore-standalone-native ikcore-standalone-stage/usr/lib/ikcore-standalone/ikcore-standalone-native
+          cp dist/ikcore_sgbpack_libretro.so ikcore-standalone-stage/usr/lib/ikcore-standalone/ikcore_sgbpack_libretro.so
+          chmod 755 ikcore-standalone-stage/usr/lib/ikcore-standalone/ikcore-standalone-native
+
+          cat > ikcore-standalone-stage/bin/ikcore <<'EOF'
+          #!/bin/sh
+          exec /usr/lib/ikcore-standalone/ikcore-standalone-native "$@"
+          EOF
+          chmod 755 ikcore-standalone-stage/bin/ikcore
+
+          cat > ikcore-standalone-stage/install <<'EOF'
+          #!/bin/sh
+          mkdir -p "$rootfs/usr/lib/ikcore-standalone"
+          copy "./bin/ikcore" "$rootfs/bin/ikcore"
+          copy "./usr/lib/ikcore-standalone/ikcore-standalone-native" "$rootfs/usr/lib/ikcore-standalone/ikcore-standalone-native"
+          copy "./usr/lib/ikcore-standalone/ikcore_sgbpack_libretro.so" "$rootfs/usr/lib/ikcore-standalone/ikcore_sgbpack_libretro.so"
+          chmod +x "$rootfs/bin/ikcore"
+          chmod +x "$rootfs/usr/lib/ikcore-standalone/ikcore-standalone-native"
+          copy "./usr/lib/ikcore-standalone/build.txt" "$rootfs/usr/lib/ikcore-standalone/build.txt"
+          EOF
+
+          cat > ikcore-standalone-stage/uninstall <<'EOF'
+          #!/bin/sh
+          rm -f "$rootfs/bin/ikcore"
+          rm -f "$rootfs/usr/lib/ikcore-standalone/ikcore-standalone-native"
+          rm -f "$rootfs/usr/lib/ikcore-standalone/ikcore_sgbpack_libretro.so"
+          rm -f "$rootfs/usr/lib/ikcore-standalone/build.txt"
+          rmdir "$rootfs/usr/lib/ikcore-standalone" 2>/dev/null || true
+          EOF
+
+          printf "Ik Core standalone (identical SGB engine to approved #137) | run %s | commit %s\n" "${{ github.run_number }}" "${{ github.sha }}" > ikcore-standalone-stage/usr/lib/ikcore-standalone/build.txt
+          chmod 755 ikcore-standalone-stage/install ikcore-standalone-stage/uninstall
+          tar -C ikcore-standalone-stage -czf IkCore-Standalone-SGB-Hakchi-${{ github.run_number }}.hmod .
+          sha256sum IkCore-Standalone-SGB-Hakchi-${{ github.run_number }}.hmod > IkCore-Standalone-SGB-Hakchi-${{ github.run_number }}.hmod.sha256
+
+      - name: Package assignment instructions
+        run: |
+          cat > README-IKCORE-HAKCHI.txt <<'EOF'
+          IK CORE - SGBPACK1 standalone emulator for Hakchi (NES Mini)
+          =============================================================
+          Installs a separate emulator without uninstalling or overwriting
+          the previously validated /bin/sgbpack-native (#137).
+
+          New launcher: /bin/ikcore
+          Tested input format: SGBPACK1 (.sfc/.smc), generated with the
+          Ik Core SGBPACK Builder using the legally obtained SGB BIOS and GB ROM.
+          Ordinary .gb/.gbc, plain SNES .sfc, and .zip/.7z are NOT verified
+          as #137-equivalent inputs; do not assign those without conversion.
+          The installer includes neither game ROM nor SGB firmware.
+
+          On each Hakchi game:
+            Select game -> Command line
+            /bin/ikcore "/var/lib/hakchi/games/CLV-XXXXX/Your_SGBPACK.sfc"
+          Keep the actual game pathname from the existing Command line.
+          One game = one independent configured ROM path.
+
+          Unlike experimental #137, no 120 second automatic exit.
+          Exit back to Clover: hold SELECT+START for 1.5 seconds.
+          Audio, graphics, SGB border and SPC700 code: unchanged from #137.
+
+          Each release has a separate build-specific log:
+            /var/lib/hakchi/sgb-native-test/ikcore-standalone-<run>.log
+
+          Installation of this standalone module does not modify:
+            /bin/sgbpack-native
+            /usr/lib/ikcore/
+            /bin/sgbpack
+          EOF
+
+      - name: Upload standalone HMOD and instructions
+        uses: actions/upload-artifact@v4
+        with:
+          name: IkCore-Standalone-SGB-Hakchi-${{ github.run_number }}
+          path: |
+            IkCore-Standalone-SGB-Hakchi-${{ github.run_number }}.hmod
+            IkCore-Standalone-SGB-Hakchi-${{ github.run_number }}.hmod.sha256
+            README-IKCORE-HAKCHI.txt
+          retention-days: 30
+          if-no-files-found: error
