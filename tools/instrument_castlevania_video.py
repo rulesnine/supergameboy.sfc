@@ -86,6 +86,79 @@ probe = """#ifdef IKCORE_SGB_VIDEO_TRACE
 
 """
 region=region.replace(copy_anchor,probe+copy_anchor,1)
+# Controlled Castlevania-only diagnostic: if its GB framebuffer is varied but
+# the SGB pane remains completely black for >30 consecutive direct frames,
+# replace the PRESENTATION pane with the standard DMG grayscale. Do not touch
+# palette state, ROM, BIOS, audio, PPU, or other games.
+fallback = r'''#ifdef IKCORE_CASTLEVANIA_PALETTE_TEST
+	static unsigned long ikpal_bad_consecutive = 0;
+	static unsigned long ikpal_fallback_frames = 0;
+	const std::vector<uint8_t> &ikpal_rom = impl_->cart.rom;
+	const bool ikpal_target = ikpal_rom.size() == 0x40000 &&
+		std::memcmp(ikpal_rom.data() + 0x134, "CASTLEVANIA", 11) == 0;
+	if (ikpal_target && !impl_->BiosMode() &&
+	    impl_->sgb_state.mask_mode == SGB_MASK_CANCEL)
+	{
+		unsigned ikpal_raw_var = 0;
+		bool ikpal_pane_black = true;
+		for (unsigned y = 0; y < GB_SCREEN_HEIGHT; ++y)
+		{
+			for (unsigned x = 0; x < GB_SCREEN_WIDTH; ++x)
+			{
+				const unsigned idx = y * GB_SCREEN_WIDTH + x;
+				if (impl_->ppu.framebuffer[idx] & 3u) ++ikpal_raw_var;
+				if (staging[(y + 40) * SGB_BORDER_W + x + 48] != 0)
+					ikpal_pane_black = false;
+			}
+		}
+		if (ikpal_pane_black && ikpal_raw_var > 100)
+		{
+			++ikpal_bad_consecutive;
+			const bool enable_fallback = ikpal_bad_consecutive > 30;
+			const auto &s = impl_->sgb_state;
+			if (ikpal_bad_consecutive == 31 ||
+			    (ikpal_bad_consecutive % 120u) == 0u)
+			{
+				char msg[448];
+				std::snprintf(msg, sizeof msg,
+				    "IKPAL black=%lu fallback=%u mask=%u LCDC=%02X palWrites=%u "
+				    "attrWrites=%u pal0=%04X,%04X,%04X,%04X "
+				    "pal1=%04X,%04X,%04X,%04X attr00=%u attr11=%u "
+				    "lastCmd=%02X rawVar=%u",
+				    ikpal_bad_consecutive, (unsigned)enable_fallback,
+				    (unsigned)s.mask_mode, (unsigned)impl_->ppu.lcdc,
+				    (unsigned)s.palette_writes, (unsigned)s.attr_writes,
+				    (unsigned)s.active[0].colors[0], (unsigned)s.active[0].colors[1],
+				    (unsigned)s.active[0].colors[2], (unsigned)s.active[0].colors[3],
+				    (unsigned)s.active[1].colors[0], (unsigned)s.active[1].colors[1],
+				    (unsigned)s.active[1].colors[2], (unsigned)s.active[1].colors[3],
+				    (unsigned)s.attr_map[0], (unsigned)s.attr_map[21],
+				    (unsigned)s.last_cmd, ikpal_raw_var);
+				S9xMessage(S9X_INFO, S9X_ROM_INFO, msg);
+			}
+			if (enable_fallback)
+			{
+				static const uint16_t gray[4] =
+				    { 0x7FFF, 0x56B5, 0x294A, 0x0000 };
+				for (unsigned y = 0; y < GB_SCREEN_HEIGHT; ++y)
+					for (unsigned x = 0; x < GB_SCREEN_WIDTH; ++x)
+					{
+						const unsigned idx = y * GB_SCREEN_WIDTH + x;
+						staging[(y + 40) * SGB_BORDER_W + x + 48] =
+							GbShowColor(gray[impl_->ppu.framebuffer[idx] & 3u], false);
+					}
+				++ikpal_fallback_frames;
+			}
+		}
+		else
+		{
+			ikpal_bad_consecutive = 0;
+		}
+	}
+#endif
+
+'''
+region = region.replace(copy_anchor, fallback + copy_anchor, 1)
 s=s[:blit_start]+region+s[blit_end:]
 p.write_text(s,encoding="utf-8")
 print("IKVID trace inserted: handoff state + framebuffer/pane sample every 120 frames.")
