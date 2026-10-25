@@ -17,15 +17,15 @@ def exactly_once(old, new, label):
         raise RuntimeError(f"{label}: wanted 1 matching block; found {n}")
     s = s.replace(old, new, 1)
 
-def in_run_cycles_once(old, new, label):
+def in_all_cycle_engines(old, new, label):
     global s
-    a = s.index("void Emulator::RunCycles(int32_t tcycles)")
-    b = s.index("const FrameBuffer &Emulator::GetFrameBuffer()", a)
-    region = s[a:b]
-    n = region.count(old)
-    if n != 1:
-        raise RuntimeError(f"{label}: wanted 1 RunCycles match, found {n}")
-    s = s[:a] + region.replace(old, new, 1) + s[b:]
+    # apply_sgbpack.py has two cycle runners: RunCycles and the alternative
+    # RunSyncCycles (compiled only with IKCORE_SGB_FULL_FASTSYNC). Keep both
+    # semantically identical so an eventual build using the latter is safe.
+    n = s.count(old)
+    if n != 2:
+        raise RuntimeError(f"{label}: expected both cycle runners, found {n}")
+    s = s.replace(old, new)
 
 # Extend asynchronous LCD transfer types instead of passing VRAM directly.
 exactly_once(
@@ -65,7 +65,7 @@ new="""\t\tconst uint8_t cmd =
 \t\t\t(impl_->border_capture.stage == Impl::BorderCapture::PctTrn) ? 0x14 :
 \t\t\t(impl_->border_capture.stage == Impl::BorderCapture::PalTrn) ? 0x0B : 0x15;
 """
-in_run_cycles_once(old,new,"commit decoded LCD transfer by command")
+in_all_cycle_engines(old,new,"commit decoded LCD transfer by command")
 
 # Tiny event-only telemetry; no scanning 23040 pixels each displayed frame.
 old = """\t\tSgbHandleCommand(impl_->sgb_state, cmd,
@@ -94,7 +94,7 @@ new = """\t\tSgbHandleCommand(impl_->sgb_state, cmd,
 \t\t}
 \t\tif (cmd == 0x13 || cmd == 0x14) ++impl_->border_plane;
 """
-in_run_cycles_once(old,new,"commit transfer and trace only on captured commands")
+in_all_cycle_engines(old,new,"commit transfer and trace only on captured commands")
 
 # After PAL_SET, read the resulting 4-shade active palette (event-only).
 old = """\tSgbHandleCommand(impl_->sgb_state, cmd, data, len,
