@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - 'tools/prepare_ikcore_standalone.py'
+      - 'tools/fix_sgb_lcd_palette_transfers.py'
       - 'tools/patch_ikcore_hakchi_loader.py'
       - 'native_n2/ikcore_hakchi_launcher.sh'
       - 'tools/patch_ikcore_sram.py'
