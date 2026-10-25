@@ -1,4 +1,4 @@
-name: Ik Core EXP Fast SGB Composite #43 (NO DEVICE TEST)
+name: Ik Core EXP Castlevania BIOS PCT Handoff #46 (NO DEVICE TEST)
 
 on:
   workflow_dispatch:
@@ -7,6 +7,7 @@ on:
       - 'tools/prepare_ikcore_standalone.py'
       - 'tools/fix_sgb_lcd_palette_transfers.py'
       - 'tools/optimize_sgb_compositor.py'
+      - 'tools/test_castlevania_pct_handoff.py'
       - 'tools/patch_ikcore_hakchi_loader.py'
       - 'native_n2/ikcore_hakchi_launcher.sh'
       - 'tools/patch_ikcore_sram.py'
@@ -109,6 +110,7 @@ jobs:
           python3 ikcore-project/tools/apply_sgbpack.py
           python3 ikcore-project/tools/fix_sgb_lcd_palette_transfers.py
           python3 ikcore-project/tools/optimize_sgb_compositor.py
+          python3 ikcore-project/tools/test_castlevania_pct_handoff.py
           cd supersnes9x
           git diff --check
           grep -q "Ik Core loaded SGBPACK1" memmap.cpp
@@ -126,7 +128,7 @@ jobs:
             AR="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar" \
             STRIP="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-strip" \
             HAVE_UNZIP=0 \
-            CPPFLAGS="-DSGBPACK_LITE -DIKCORE_GB_FAST_IDLE -DIKCORE_PPU_IDLE_FAST -DIKCORE_MBC5_FAST -DIKCORE_FIXED_ACID_KNOBS -DIKCORE_SGB_PERF_PPU -DIKCORE_SGB_HYBRID_AUDIO -DIKCORE_SGB_COMPOSITOR_FAST -DIKCORE_SGB_LAZY_APU -DIKCORE_SGB_PERF_AUDIO_THREADED -DIKCORE_SGB_PERF_AUDIO_RATE_LOCK" \
+            CPPFLAGS="-DSGBPACK_LITE -DIKCORE_GB_FAST_IDLE -DIKCORE_PPU_IDLE_FAST -DIKCORE_MBC5_FAST -DIKCORE_FIXED_ACID_KNOBS -DIKCORE_SGB_PERF_PPU -DIKCORE_SGB_HYBRID_AUDIO -DIKCORE_SGB_COMPOSITOR_FAST -DIKCORE_CASTLEVANIA_PCT_HANDOFF -DIKCORE_SGB_LAZY_APU -DIKCORE_SGB_PERF_AUDIO_THREADED -DIKCORE_SGB_PERF_AUDIO_RATE_LOCK" \
             LDFLAGS="-flto=4 -pthread -static-libgcc -static-libstdc++" \
             LIBS="$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6"
 
@@ -160,7 +162,7 @@ jobs:
             exit 1
           fi
 
-          echo "CORE MODE: EXPERIMENTAL SGB compositor cached border/palettes; PAL_TRN fix, fast PPU, audio unchanged. NOT DEVICE VALIDATED" >> "$GITHUB_WORKSPACE/dist/CORE-VERIFY.txt"
+          echo "CORE MODE: Experimental Castlevania-only PCT-before-handoff timing test, #43 graphics and audio unchanged. NOT DEVICE VALIDATED" >> "$GITHUB_WORKSPACE/dist/CORE-VERIFY.txt"
           cp "$CORE" "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so"
           "$STRIP" --strip-unneeded "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so"
           sha256sum "$GITHUB_WORKSPACE/dist/ikcore_sgbpack_libretro.so" > "$GITHUB_WORKSPACE/dist/SHA256-core.txt"
@@ -194,9 +196,9 @@ jobs:
             "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
           sed -i "s/__IKCORE_RUN_NUMBER__/${GITHUB_RUN_NUMBER}/g" "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
           # Redirect ONLY this experimental frontend to its isolated core and log.
-          sed -i -e "s@/usr/lib/ikcore-standalone/@/usr/lib/ikcore-compositor-test/@g" \
-                 -e "s@ikcore-standalone-@ikcore-compositor-test-@g" "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
-          grep -Fq "/usr/lib/ikcore-compositor-test/ikcore_sgbpack_libretro.so" "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
+          sed -i -e "s@/usr/lib/ikcore-standalone/@/usr/lib/ikcore-pct-handoff-test/@g" \
+                 -e "s@ikcore-standalone-@ikcore-pct-handoff-test-@g" "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
+          grep -Fq "/usr/lib/ikcore-pct-handoff-test/ikcore_sgbpack_libretro.so" "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
           grep -Fq 'while (!g_shutdown_requested && !g_swap_failed && !ik_exit_signal)' "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
           grep -Fq 'return NULL;' "$GITHUB_WORKSPACE/dist/ikcore_standalone.c"
 
@@ -235,83 +237,83 @@ jobs:
           "$STRIP" --strip-unneeded "$GITHUB_WORKSPACE/dist/ikcore-standalone-native"
           sha256sum "$GITHUB_WORKSPACE/dist/ikcore-standalone-native" > "$GITHUB_WORKSPACE/dist/SHA256-frontend.txt"
 
-      - name: Package isolated experimental SGB fast compositor HMOD
+      - name: Package isolated experimental Castlevania PCT handoff HMOD
         run: |
           set -e
-          rm -rf ikcore-compositor-test-stage
-          mkdir -p ikcore-compositor-test-stage/bin ikcore-compositor-test-stage/usr/lib/ikcore-compositor-test/lib
+          rm -rf ikcore-pct-handoff-test-stage
+          mkdir -p ikcore-pct-handoff-test-stage/bin ikcore-pct-handoff-test-stage/usr/lib/ikcore-pct-handoff-test/lib
 
-          cp dist/ikcore-standalone-native ikcore-compositor-test-stage/usr/lib/ikcore-compositor-test/ikcore-standalone-native
-          cp dist/ikcore_sgbpack_libretro.so ikcore-compositor-test-stage/usr/lib/ikcore-compositor-test/ikcore_sgbpack_libretro.so
-          chmod 755 ikcore-compositor-test-stage/usr/lib/ikcore-compositor-test/ikcore-standalone-native
+          cp dist/ikcore-standalone-native ikcore-pct-handoff-test-stage/usr/lib/ikcore-pct-handoff-test/ikcore-standalone-native
+          cp dist/ikcore_sgbpack_libretro.so ikcore-pct-handoff-test-stage/usr/lib/ikcore-pct-handoff-test/ikcore_sgbpack_libretro.so
+          chmod 755 ikcore-pct-handoff-test-stage/usr/lib/ikcore-pct-handoff-test/ikcore-standalone-native
 
           # Bundle ARMhf 7za plus its exact Xenial C++ runtime. Do not depend
           # on globally installed Hakchi/RetroArch modules or change core ABI.
-          cp "$GITHUB_WORKSPACE/xenial-sysroot/usr/lib/p7zip/7za" ikcore-compositor-test-stage/usr/lib/ikcore-compositor-test/7za
-          cp "$GITHUB_WORKSPACE/xenial-sysroot/usr/lib/arm-linux-gnueabihf/libstdc++.so.6" ikcore-compositor-test-stage/usr/lib/ikcore-compositor-test/lib/
-          cp "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libgcc_s.so.1" ikcore-compositor-test-stage/usr/lib/ikcore-compositor-test/lib/
-          chmod 755 ikcore-compositor-test-stage/usr/lib/ikcore-compositor-test/7za
-          chmod 755 ikcore-compositor-test-stage/usr/lib/ikcore-compositor-test/lib/*.so*
-          "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf" -h ikcore-compositor-test-stage/usr/lib/ikcore-compositor-test/7za | grep -q 'Machine:.*ARM'
-          "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf" -V ikcore-compositor-test-stage/usr/lib/ikcore-compositor-test/7za > dist/7ZA-VERIFY.txt
+          cp "$GITHUB_WORKSPACE/xenial-sysroot/usr/lib/p7zip/7za" ikcore-pct-handoff-test-stage/usr/lib/ikcore-pct-handoff-test/7za
+          cp "$GITHUB_WORKSPACE/xenial-sysroot/usr/lib/arm-linux-gnueabihf/libstdc++.so.6" ikcore-pct-handoff-test-stage/usr/lib/ikcore-pct-handoff-test/lib/
+          cp "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libgcc_s.so.1" ikcore-pct-handoff-test-stage/usr/lib/ikcore-pct-handoff-test/lib/
+          chmod 755 ikcore-pct-handoff-test-stage/usr/lib/ikcore-pct-handoff-test/7za
+          chmod 755 ikcore-pct-handoff-test-stage/usr/lib/ikcore-pct-handoff-test/lib/*.so*
+          "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf" -h ikcore-pct-handoff-test-stage/usr/lib/ikcore-pct-handoff-test/7za | grep -q 'Machine:.*ARM'
+          "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf" -V ikcore-pct-handoff-test-stage/usr/lib/ikcore-pct-handoff-test/7za > dist/7ZA-VERIFY.txt
           if grep -Eq 'GLIBC_2\\.(2[4-9]|[3-9][0-9])' dist/7ZA-VERIFY.txt; then
             echo "7za requires GLIBC newer than NES Mini Xenial" >&2
             exit 1
           fi
 
           sed "s/__IKCORE_RUN_NUMBER__/${GITHUB_RUN_NUMBER}/g" \
-            ikcore-project/native_n2/ikcore_hakchi_launcher.sh > ikcore-compositor-test-stage/bin/ikcore-compositor-test
+            ikcore-project/native_n2/ikcore_hakchi_launcher.sh > ikcore-pct-handoff-test-stage/bin/ikcore-pct-handoff-test
           # Redirect only staged launcher paths; do not alter #25 launcher.
-          sed -i -e "s@/usr/lib/ikcore-standalone/@/usr/lib/ikcore-compositor-test/@g" \
-                 -e "s@ikcore-standalone-${GITHUB_RUN_NUMBER}-wrapper.log@ikcore-compositor-test-${GITHUB_RUN_NUMBER}-wrapper.log@g" ikcore-compositor-test-stage/bin/ikcore-compositor-test
-          chmod 755 ikcore-compositor-test-stage/bin/ikcore-compositor-test
-          grep -Fq "CORE=/usr/lib/ikcore-compositor-test/ikcore-standalone-native" ikcore-compositor-test-stage/bin/ikcore-compositor-test
-          sh -n ikcore-compositor-test-stage/bin/ikcore-compositor-test
+          sed -i -e "s@/usr/lib/ikcore-standalone/@/usr/lib/ikcore-pct-handoff-test/@g" \
+                 -e "s@ikcore-standalone-${GITHUB_RUN_NUMBER}-wrapper.log@ikcore-pct-handoff-test-${GITHUB_RUN_NUMBER}-wrapper.log@g" ikcore-pct-handoff-test-stage/bin/ikcore-pct-handoff-test
+          chmod 755 ikcore-pct-handoff-test-stage/bin/ikcore-pct-handoff-test
+          grep -Fq "CORE=/usr/lib/ikcore-pct-handoff-test/ikcore-standalone-native" ikcore-pct-handoff-test-stage/bin/ikcore-pct-handoff-test
+          sh -n ikcore-pct-handoff-test-stage/bin/ikcore-pct-handoff-test
 
-          cat > ikcore-compositor-test-stage/install <<'EOF'
+          cat > ikcore-pct-handoff-test-stage/install <<'EOF'
           #!/bin/sh
-          mkdir -p "$rootfs/usr/lib/ikcore-compositor-test"
-          copy "./bin/ikcore-compositor-test" "$rootfs/bin/ikcore-compositor-test"
-          copy "./usr/lib/ikcore-compositor-test/ikcore-standalone-native" "$rootfs/usr/lib/ikcore-compositor-test/ikcore-standalone-native"
-          copy "./usr/lib/ikcore-compositor-test/ikcore_sgbpack_libretro.so" "$rootfs/usr/lib/ikcore-compositor-test/ikcore_sgbpack_libretro.so"
-          mkdir -p "$rootfs/usr/lib/ikcore-compositor-test/lib"
-          copy "./usr/lib/ikcore-compositor-test/7za" "$rootfs/usr/lib/ikcore-compositor-test/7za"
-          copy "./usr/lib/ikcore-compositor-test/lib/libstdc++.so.6" "$rootfs/usr/lib/ikcore-compositor-test/lib/libstdc++.so.6"
-          copy "./usr/lib/ikcore-compositor-test/lib/libgcc_s.so.1" "$rootfs/usr/lib/ikcore-compositor-test/lib/libgcc_s.so.1"
-          chmod +x "$rootfs/usr/lib/ikcore-compositor-test/7za"
-          chmod +x "$rootfs/bin/ikcore-compositor-test"
-          chmod +x "$rootfs/usr/lib/ikcore-compositor-test/ikcore-standalone-native"
-          copy "./usr/lib/ikcore-compositor-test/build.txt" "$rootfs/usr/lib/ikcore-compositor-test/build.txt"
+          mkdir -p "$rootfs/usr/lib/ikcore-pct-handoff-test"
+          copy "./bin/ikcore-pct-handoff-test" "$rootfs/bin/ikcore-pct-handoff-test"
+          copy "./usr/lib/ikcore-pct-handoff-test/ikcore-standalone-native" "$rootfs/usr/lib/ikcore-pct-handoff-test/ikcore-standalone-native"
+          copy "./usr/lib/ikcore-pct-handoff-test/ikcore_sgbpack_libretro.so" "$rootfs/usr/lib/ikcore-pct-handoff-test/ikcore_sgbpack_libretro.so"
+          mkdir -p "$rootfs/usr/lib/ikcore-pct-handoff-test/lib"
+          copy "./usr/lib/ikcore-pct-handoff-test/7za" "$rootfs/usr/lib/ikcore-pct-handoff-test/7za"
+          copy "./usr/lib/ikcore-pct-handoff-test/lib/libstdc++.so.6" "$rootfs/usr/lib/ikcore-pct-handoff-test/lib/libstdc++.so.6"
+          copy "./usr/lib/ikcore-pct-handoff-test/lib/libgcc_s.so.1" "$rootfs/usr/lib/ikcore-pct-handoff-test/lib/libgcc_s.so.1"
+          chmod +x "$rootfs/usr/lib/ikcore-pct-handoff-test/7za"
+          chmod +x "$rootfs/bin/ikcore-pct-handoff-test"
+          chmod +x "$rootfs/usr/lib/ikcore-pct-handoff-test/ikcore-standalone-native"
+          copy "./usr/lib/ikcore-pct-handoff-test/build.txt" "$rootfs/usr/lib/ikcore-pct-handoff-test/build.txt"
           EOF
 
-          cat > ikcore-compositor-test-stage/uninstall <<'EOF'
+          cat > ikcore-pct-handoff-test-stage/uninstall <<'EOF'
           #!/bin/sh
-          rm -f "$rootfs/bin/ikcore-compositor-test"
-          rm -f "$rootfs/usr/lib/ikcore-compositor-test/ikcore-standalone-native"
-          rm -f "$rootfs/usr/lib/ikcore-compositor-test/ikcore_sgbpack_libretro.so"
-          rm -f "$rootfs/usr/lib/ikcore-compositor-test/build.txt"
-          rm -f "$rootfs/usr/lib/ikcore-compositor-test/7za"
-          rm -f "$rootfs/usr/lib/ikcore-compositor-test/lib/libstdc++.so.6"
-          rm -f "$rootfs/usr/lib/ikcore-compositor-test/lib/libgcc_s.so.1"
-          rmdir "$rootfs/usr/lib/ikcore-compositor-test/lib" 2>/dev/null || true
-          rmdir "$rootfs/usr/lib/ikcore-compositor-test" 2>/dev/null || true
+          rm -f "$rootfs/bin/ikcore-pct-handoff-test"
+          rm -f "$rootfs/usr/lib/ikcore-pct-handoff-test/ikcore-standalone-native"
+          rm -f "$rootfs/usr/lib/ikcore-pct-handoff-test/ikcore_sgbpack_libretro.so"
+          rm -f "$rootfs/usr/lib/ikcore-pct-handoff-test/build.txt"
+          rm -f "$rootfs/usr/lib/ikcore-pct-handoff-test/7za"
+          rm -f "$rootfs/usr/lib/ikcore-pct-handoff-test/lib/libstdc++.so.6"
+          rm -f "$rootfs/usr/lib/ikcore-pct-handoff-test/lib/libgcc_s.so.1"
+          rmdir "$rootfs/usr/lib/ikcore-pct-handoff-test/lib" 2>/dev/null || true
+          rmdir "$rootfs/usr/lib/ikcore-pct-handoff-test" 2>/dev/null || true
           EOF
 
-          printf "IKCORE EXP SGB COMPOSITOR - NOT HARDWARE VALIDATED (reference base #25) | run %s | commit %s\n" "${{ github.run_number }}" "${{ github.sha }}" > ikcore-compositor-test-stage/usr/lib/ikcore-compositor-test/build.txt
-          chmod 755 ikcore-compositor-test-stage/install ikcore-compositor-test-stage/uninstall
-          tar -C ikcore-compositor-test-stage -czf IkCore-EXPERIMENTAL-COMPOSITOR-${{ github.run_number }}.hmod .
-          sha256sum IkCore-EXPERIMENTAL-COMPOSITOR-${{ github.run_number }}.hmod > IkCore-EXPERIMENTAL-COMPOSITOR-${{ github.run_number }}.hmod.sha256
+          printf "IKCORE EXP PCT HANDOFF - NOT HARDWARE VALIDATED (reference base #25) | run %s | commit %s\n" "${{ github.run_number }}" "${{ github.sha }}" > ikcore-pct-handoff-test-stage/usr/lib/ikcore-pct-handoff-test/build.txt
+          chmod 755 ikcore-pct-handoff-test-stage/install ikcore-pct-handoff-test-stage/uninstall
+          tar -C ikcore-pct-handoff-test-stage -czf IkCore-EXPERIMENTAL-PCT-HANDOFF-${{ github.run_number }}.hmod .
+          sha256sum IkCore-EXPERIMENTAL-PCT-HANDOFF-${{ github.run_number }}.hmod > IkCore-EXPERIMENTAL-PCT-HANDOFF-${{ github.run_number }}.hmod.sha256
 
       - name: Package assignment instructions
         run: |
           cat > README-IKCORE-HAKCHI.txt <<'EOF'
-          IK CORE EXPERIMENTAL SGB FAST COMPOSITOR - SGBPACK1 for NES Mini
+          IK CORE EXPERIMENTAL CASTLEVANIA PCT HANDOFF - SGBPACK1 for NES Mini
           =============================================================
           EXPERIMENTAL / DIAGNOSTIC ONLY. No device validation.
           Preserves stable /bin/ikcore and /usr/lib/ikcore-standalone (#25).
-          Use /bin/ikcore-compositor-test only on a test game entry. Core logs IKTRN. NOT VALIDATED ON NES MINI; verify KOF96 and Castlevania.
+          Use /bin/ikcore-pct-handoff-test only on a test game entry. Core logs IKTRN and PERF2 switch. NOT DEVICE VALIDATED; test intro, title, audio and FPS.
 
-          New launcher: /bin/ikcore-compositor-test
+          New launcher: /bin/ikcore-pct-handoff-test
           Tested input format: SGBPACK1 (.sfc/.smc), either original or
           compressed by Hakchi as .sfc.7z / .smc.7z. The wrapper extracts
           the selected game to temporary storage and removes it on exit.
@@ -325,7 +327,7 @@ jobs:
 
           On each Hakchi game:
             Select game -> Command line
-            /bin/ikcore-compositor-test "/var/lib/hakchi/games/CLV-XXXXX/Your_SGBPACK.sfc"
+            /bin/ikcore-pct-handoff-test "/var/lib/hakchi/games/CLV-XXXXX/Your_SGBPACK.sfc"
           Keep the actual game pathname from the existing Command line.
           One game = one independent configured ROM path.
 
@@ -353,7 +355,7 @@ jobs:
           corrupt/wrong-sized existing saves are never overwritten.
           Unlike experimental #137, no 120 second automatic exit.
           Exit back to Clover: hold SELECT+START for 1.5 seconds.
-          EXPERIMENTAL: prior PAL_TRN/ATTR_TRN verified graphics kept, plus cached SGB border and per-tile host color conversion to reduce CPU. Original audio and GB PPU unchanged.
+          EXPERIMENTAL: #43 compositor and sound unchanged, delayed BIOS handoff only for Castlevania until first complete SGB PCT_TRN. KOF96 untouched.
           NOT proven on NES Mini; leave stable #25 installed.
 
           Each release has a separate build-specific log:
@@ -368,10 +370,10 @@ jobs:
       - name: Upload standalone HMOD and instructions
         uses: actions/upload-artifact@v4
         with:
-          name: IkCore-EXPERIMENTAL-COMPOSITOR-${{ github.run_number }}
+          name: IkCore-EXPERIMENTAL-PCT-HANDOFF-${{ github.run_number }}
           path: |
-            IkCore-EXPERIMENTAL-COMPOSITOR-${{ github.run_number }}.hmod
-            IkCore-EXPERIMENTAL-COMPOSITOR-${{ github.run_number }}.hmod.sha256
+            IkCore-EXPERIMENTAL-PCT-HANDOFF-${{ github.run_number }}.hmod
+            IkCore-EXPERIMENTAL-PCT-HANDOFF-${{ github.run_number }}.hmod.sha256
             README-IKCORE-HAKCHI.txt
           retention-days: 30
           if-no-files-found: error
