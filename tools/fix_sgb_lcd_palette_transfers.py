@@ -17,6 +17,16 @@ def exactly_once(old, new, label):
         raise RuntimeError(f"{label}: wanted 1 matching block; found {n}")
     s = s.replace(old, new, 1)
 
+def in_run_cycles_once(old, new, label):
+    global s
+    a = s.index("void Emulator::RunCycles(int32_t tcycles)")
+    b = s.index("const FrameBuffer &Emulator::GetFrameBuffer()", a)
+    region = s[a:b]
+    n = region.count(old)
+    if n != 1:
+        raise RuntimeError(f"{label}: wanted 1 RunCycles match, found {n}")
+    s = s[:a] + region.replace(old, new, 1) + s[b:]
+
 # Extend asynchronous LCD transfer types instead of passing VRAM directly.
 exactly_once(
     "enum Stage : uint8_t { Idle = 0, ChrTrn = 1, PctTrn = 2 };",
@@ -55,7 +65,7 @@ new="""\t\tconst uint8_t cmd =
 \t\t\t(impl_->border_capture.stage == Impl::BorderCapture::PctTrn) ? 0x14 :
 \t\t\t(impl_->border_capture.stage == Impl::BorderCapture::PalTrn) ? 0x0B : 0x15;
 """
-exactly_once(old,new,"commit decoded LCD transfer by command")
+in_run_cycles_once(old,new,"commit decoded LCD transfer by command")
 
 # Tiny event-only telemetry; no scanning 23040 pixels each displayed frame.
 old = """\t\tSgbHandleCommand(impl_->sgb_state, cmd,
@@ -84,7 +94,7 @@ new = """\t\tSgbHandleCommand(impl_->sgb_state, cmd,
 \t\t}
 \t\tif (cmd == 0x13 || cmd == 0x14) ++impl_->border_plane;
 """
-exactly_once(old,new,"commit transfer and trace only on captured commands")
+in_run_cycles_once(old,new,"commit transfer and trace only on captured commands")
 
 # After PAL_SET, read the resulting 4-shade active palette (event-only).
 old = """\tSgbHandleCommand(impl_->sgb_state, cmd, data, len,
