@@ -259,8 +259,9 @@ jobs:
             ikcore-project/native_n2/ikcore_hakchi_launcher.sh > ikcore-fifo-test-stage/bin/ikcore-fifo-test
           # Redirect only staged launcher paths; do not alter #25 launcher.
           sed -i -e "s@/usr/lib/ikcore-standalone/@/usr/lib/ikcore-fifo-test/@g" \
-                 -e "s@ikcore-standalone-@ikcore-fifo-test-@g" ikcore-fifo-test-stage/bin/ikcore-fifo-test
+                 -e "s@ikcore-standalone-${GITHUB_RUN_NUMBER}-wrapper.log@ikcore-fifo-test-${GITHUB_RUN_NUMBER}-wrapper.log@g" ikcore-fifo-test-stage/bin/ikcore-fifo-test
           chmod 755 ikcore-fifo-test-stage/bin/ikcore-fifo-test
+          grep -Fq "CORE=/usr/lib/ikcore-fifo-test/ikcore-standalone-native" ikcore-fifo-test-stage/bin/ikcore-fifo-test
           sh -n ikcore-fifo-test-stage/bin/ikcore-fifo-test
 
           cat > ikcore-fifo-test-stage/install <<'EOF'
