@@ -1,0 +1,91 @@
+name: IK Core mGBA SGB audio Phase 2 (NO HMOD)
+on:
+  push:
+    branches:
+      - integracion/mgba-sgb-sonido-transferencia-fase2
+    paths:
+      - ".github/workflows/ikcore-mgba-sgb-audio-fase2.yml"
+      - "native_mgba/ikcore_sgb_audio_bridge.c"
+      - "native_mgba/ikcore_sgb_audio_bridge.h"
+      - "tools/patch_mgba_sgb_sound_transfer_fase2.py"
+      - "tests/ikcore_sgb_audio_bridge_test.c"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audio-bridge:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ikcore-project
+      - uses: actions/checkout@v4
+        with:
+          repository: mgba-emu/mgba
+          ref: 1509d86028c7df2d844b590723a80b2978f49e7c
+          path: mgba
+          submodules: false
+      - name: Unit-test exact LCD 4KB SOU_TRN payload and ordered SOUND queue
+        run: |
+          set -euxo pipefail
+          cc -O2 -std=c11 -Wall -Wextra -Werror \
+             ikcore-project/native_mgba/ikcore_sgb_audio_bridge.c \
+             ikcore-project/tests/ikcore_sgb_audio_bridge_test.c \
+             -o /tmp/ikcore-sgb-audio-test
+          /tmp/ikcore-sgb-audio-test | tee ikcore-sgb-audio-test.txt
+          grep -q 'IKSGB_AUDIO_BRIDGE_OK' ikcore-sgb-audio-test.txt
+      - name: Patch pinned mGBA completed packet and software PPU LCD SOU_TRN transfer
+        run: |
+          set -eux
+          python3 ikcore-project/tools/patch_mgba_sgb_bridge.py mgba
+          python3 ikcore-project/tools/patch_mgba_sgb_sound_transfer_fase2.py mgba
+          cd mgba
+          git diff --check
+          grep -Fq 'ikcore_sgb_sound_packet_hook' src/gb/video.c
+          grep -Fq 'ikcore_sgb_lcd_row_hook' src/gb/renderers/software.c
+      - name: Compile the modified mGBA core — GB cartridge route
+        run: |
+          set -eux
+          cmake -S mgba -B build-host \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DM_CORE_GB=ON -DM_CORE_GBA=ON \
+            -DBUILD_LIBRETRO=ON -DBUILD_QT=OFF -DBUILD_SDL=OFF \
+            -DBUILD_SHARED=OFF -DBUILD_STATIC=OFF -DSKIP_LIBRARY=ON \
+            -DDISABLE_DEPS=ON -DUSE_ZLIB=OFF -DUSE_PNG=OFF \
+            -DUSE_MINIZIP=OFF -DUSE_LIBZIP=OFF -DUSE_LZMA=OFF \
+            -DUSE_SQLITE3=OFF -DENABLE_SCRIPTING=OFF -DBUILD_LTO=OFF \
+            -DBUILD_TEST=OFF -DBUILD_SUITE=OFF -DBUILD_PERF=OFF
+          cmake --build build-host --target mgba_libretro --parallel 3
+          test -s build-host/mgba_libretro.so
+          python3 ikcore-project/tools/make_synthetic_gb_rom.py ikcore-synthetic.gb
+          cc -O2 -std=gnu11 -I mgba/src/platform/libretro \
+            ikcore-project/tests/mgba_libretro_smoke.c -ldl \
+            -o /tmp/ikcore-gb-smoke
+          /tmp/ikcore-gb-smoke "$PWD/build-host/mgba_libretro.so" \
+            "$PWD/ikcore-synthetic.gb" 240 | tee phase2-smoke.txt
+          grep -q 'IKMGBA_OK runs=240 delivered_video=240' phase2-smoke.txt
+      - name: Verify ABI is optional and only one GB frame producer remains
+        run: |
+          set -eux
+          nm -D build-host/mgba_libretro.so | grep -E 'ikcore_sgb_(sound_packet_hook|lcd_row_hook)' \
+            | tee ikcore-phase2-symbols.txt
+          # Weak hooks are absent unless a real Ik Core audio sink is linked.
+          grep -Eq ' w ikcore_sgb_sound_packet_hook| W ikcore_sgb_sound_packet_hook' ikcore-phase2-symbols.txt
+          grep -Eq ' w ikcore_sgb_lcd_row_hook| W ikcore_sgb_lcd_row_hook' ikcore-phase2-symbols.txt
+          cat > PHASE2-STATUS.txt <<'EOF'
+          PHASE2 DEVELOPMENT INTEGRATION ONLY: NOT A HMOD.
+          4KiB SOU_TRN LCD decoding and packet ordering are unit-tested.
+          Host x86 mGBA GB core still runs 240 synthetic frames.
+          SNES SPC700/DSP adapter not yet linked or executed.
+          Native ARMv7 GB-only engine from phase1 remains unchanged.
+          #43 is untouched. NO claims of NES Mini FPS/audio validation.
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IKCORE-MGBA-SGB-AUDIO-PHASE2-TESTS
+          path: |
+            ikcore-sgb-audio-test.txt
+            phase2-smoke.txt
+            ikcore-phase2-symbols.txt
+            PHASE2-STATUS.txt
+          if-no-files-found: error
