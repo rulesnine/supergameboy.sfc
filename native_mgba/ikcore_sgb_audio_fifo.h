@@ -6,6 +6,9 @@
 #define IKCORE_SGB_AUDIO_FIFO_H
 #include <stdint.h>
 #include <stdbool.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
 enum {
   IKCORE_SGB_AUDIO_CAPACITY=16,
   IKCORE_SGB_AUDIO_TRANSFER_BYTES=4096,
@@ -26,4 +29,7 @@ unsigned ikcore_sgb_audio_drain(ikcore_spc_packet_callback sound,
 /* Hooks called by the general SGB packet bus and SOU_TRN 4KiB decoder. */
 void ikcore_sgb_audio_sound_packet_hook(const uint8_t *data,unsigned len);
 void ikcore_sgb_transfer_completed_hook(const uint8_t *payload,unsigned size);
+#ifdef __cplusplus
+}
+#endif
 #endif
