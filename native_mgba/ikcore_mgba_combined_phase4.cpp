@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+extern "C" unsigned ikcore_sgb_spc_dispatch_frame(void);
 
 /* The combined library owns the mGBA session. This is deliberately separate
  * from the existing Snes9x SGB singleton to avoid corrupting #43 state. */
