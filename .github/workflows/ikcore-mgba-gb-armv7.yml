@@ -26,6 +26,15 @@ jobs:
           submodules: false
       - name: Patch completed-command-only SGB packet callback
         run: python3 ikcore-project/tools/patch_mgba_sgb_bridge.py mgba
+      - name: Verify ordered SGB packet bus before connecting SPC hardware
+        run: |
+          set -eux
+          cc -std=c11 -O2 -Wall -Wextra -Werror \
+            ikcore-project/native_mgba/ikcore_sgb_packet_bus.c \
+            ikcore-project/tests/ikcore_sgb_packet_bus_test.c \
+            -o /tmp/ikcore-sgb-bus-test
+          /tmp/ikcore-sgb-bus-test | tee ikcore-sgb-bus-test.txt
+          grep -q 'IKSGB_BUS_OK' ikcore-sgb-bus-test.txt
       - name: Build mGBA libretro container (upstream requires GBA headers); run GB cartridge only
         run: |
           set -eux
@@ -100,6 +109,20 @@ jobs:
         run: |
           set -euxo pipefail
           python3 ikcore-project/tools/patch_mgba_sgb_bridge.py mgba
+          # Xenial's ARMhf linker scripts may select non-PIC libm.a.
+          # Explicitly use the dynamic GLIBC 2.23 libm.so.6 for the .so.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("mgba/CMakeLists.txt")
+          text=p.read_text()
+          assert text.count("set(M_LIBRARY m)")==1
+          dynamic=str((Path.cwd()/"xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6").resolve())
+          assert Path(dynamic).is_file(), dynamic
+          text=text.replace("set(M_LIBRARY m)", 'set(M_LIBRARY "'+dynamic+'")')
+          p.write_text(text)
+          print("IKMGBA armhf libm pinned", dynamic)
+          PY
+
           cat > armhf-toolchain.cmake <<EOF
           set(CMAKE_SYSTEM_NAME Linux)
           set(CMAKE_SYSTEM_PROCESSOR arm)
