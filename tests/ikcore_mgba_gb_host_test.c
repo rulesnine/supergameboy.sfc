@@ -3,6 +3,17 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef IKCORE_MGBA_DIAGNOSTIC
+#include <signal.h>
+#include <execinfo.h>
+static void on_crash(int sig) {
+  void *frames[48]={0};
+  int n=backtrace(frames,48);
+  fprintf(stderr,"IKHOST_CRASH signal=%d frames=%d\n",sig,n);
+  backtrace_symbols_fd(frames,n,2);
+  _Exit(128+sig);
+}
+#endif
 static unsigned char *read_rom(const char *path,size_t *length) {
     FILE *f=fopen(path,"rb");
     if(!f)return NULL;
@@ -49,6 +60,10 @@ static int run_test(const void *data,size_t bytes,int sgb) {
     return 0;
 }
 int main(int argc,char **argv) {
+#ifdef IKCORE_MGBA_DIAGNOSTIC
+    signal(SIGSEGV,on_crash);
+    signal(SIGABRT,on_crash);
+#endif
     if(argc<2)return 1;
     size_t len=0;unsigned char *data=read_rom(argv[1],&len);
     if(!data)return 1;
