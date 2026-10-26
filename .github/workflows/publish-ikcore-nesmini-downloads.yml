@@ -1,0 +1,109 @@
+name: Publicar descargas HMOD Ik Core NES Mini
+
+on:
+  push:
+    branches:
+      - distribucion/ikcore-nesmini-descargas-hmod
+    paths:
+      - .github/workflows/publish-ikcore-nesmini-downloads.yml
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Descargar HMOD originales de GitHub Actions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p extracted downloads
+          versions=(
+            "43:40161965196:IkCore-EXPERIMENTAL-COMPOSITOR-43"
+            "44:40163042247:IkCore-EXPERIMENTAL-INTRO-TRACE-44"
+            "45:40163956743:IkCore-EXPERIMENTAL-ATF-AUDIT-45"
+            "46:40164980804:IkCore-EXPERIMENTAL-PCT-HANDOFF-46"
+            "47:40165772308:IkCore-EXPERIMENTAL-CGRAM-AUDIT-47"
+            "48:40253245127:IkCore-EXPERIMENTAL-MGBA-OVERLAY-48"
+            "49:40255064238:IkCore-EXPERIMENTAL-MGBA-OVERLAY-FALLBACK-49"
+          )
+          for item in "${versions[@]}"; do
+            IFS=: read -r version run artifact <<< "$item"
+            gh run download "$run" --repo "$GITHUB_REPOSITORY" \
+              --name "$artifact" --dir "extracted/$version"
+            test -f "extracted/$version/$artifact.hmod"
+            tar -tzf "extracted/$version/$artifact.hmod" >/dev/null
+            cp "extracted/$version/$artifact.hmod" downloads/
+            if test -f "extracted/$version/$artifact.hmod.sha256"; then
+              ( cd "extracted/$version" && sha256sum -c "$artifact.hmod.sha256" )
+              cp "extracted/$version/$artifact.hmod.sha256" downloads/
+            fi
+            ( cd "extracted/$version" && zip -q -9 -r "../../downloads/IkCore-NESMini-v${version}-paquete.zip" . )
+          done
+          cat > downloads/LEEME-DESCARGAS-IKCORE.txt <<'EOF'
+          IK CORE NES MINI - DESCARGAS HMOD v43-v49
+          =========================================
+          Repositorio oficial de los artefactos compilados por GitHub Actions.
+          Los archivos publicados son exactamente los HMOD de las compilaciones
+          originales (no nuevos binarios, no reensamblados).
+          
+          #43: referencia funcional validada por el usuario: Castlevania jugable;
+               conservar si se prueban otras versiones.
+          #44-#48: pruebas de diagnostico y compatibilidad (experimentales).
+          #49: superposicion SGB inspirada en el comportamiento de mGBA,
+               EXPERIMENTAL, aun no validada en hardware.
+          
+          Cada ZIP individual contiene el HMOD y los documentos de la compilacion.
+          Los HMOD no incluyen ROMs de juegos ni firmware SGB propietario.
+          Cada version tiene lanzadores/bibliotecas aislados. En Hakchi se debe
+          asignar el lanzador que aparece en el README de esa version.
+          
+          Para instalar: Hakchi CE > Modules > Install extra modules, seleccionar
+          el .hmod deseado. No sustituir la entrada funcional #43 hasta probar.
+          EOF
+          sha256sum downloads/*.hmod > downloads/SHA256-TODOS-HMOD.txt
+          ls -lh downloads/
+
+      - name: Crear pagina publica de descargas
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="ikcore-nesmini-hmods-43-49"
+          cat > release-notes.md <<'EOF'
+          # Ik Core NES Mini - archivo de descargas HMOD (#43-#49)
+
+          Estos HMOD se distribuyen desde **GitHub Releases**, con URLs de descarga
+          directas, sin depender de los enlaces temporales de ChatGPT.
+
+          **Referencia funcional:** #43 (Castlevania Legends jugable, FPS y audio
+          confirmados por el usuario).
+          **Versiones #44-#49:** experimentales y de diagnostico; no reemplazan
+          a la #43 hasta que el usuario confirme pruebas en NES Mini.
+
+          En **Assets** seleccione el archivo `.hmod` correspondiente o el
+          `IkCore-NESMini-vXX-paquete.zip` con instrucciones y suma SHA-256.
+          Se incluyen `LEEME-DESCARGAS-IKCORE.txt` y `SHA256-TODOS-HMOD.txt`.
+
+          Fuentes: las compilaciones originales de GitHub Actions (runs
+          40161965196, 40163042247, 40163956743, 40164980804, 40165772308,
+          40253245127 y 40255064238), sin cambios a los nucleos. No se
+          distribuyen ROMs ni firmware SGB protegido.
+          EOF
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" downloads/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" downloads/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Ik Core NES Mini: HMOD #43-#49 (archivo experimental)" \
+              --notes-file release-notes.md \
+              --prerelease
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets
