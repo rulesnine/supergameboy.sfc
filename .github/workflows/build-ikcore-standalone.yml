@@ -411,8 +411,5 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "${version}.hmod" "${version}.hmod.sha256" "IkCore-NESMini-DMG-50-paquete.zip" README-IKCORE-HAKCHI.txt --clobber
           else
-            gh release create "$tag" "${version}.hmod" "${version}.hmod.sha256" "IkCore-NESMini-DMG-50-paquete.zip" README-IKCORE-HAKCHI.txt \\
-              --target "$GITHUB_SHA" \\
-              --title "Ik Core NES Mini #50 — DMG native fast compositor (TEST)" \\
-              --notes-file release-notes.md --prerelease
+            gh release create "$tag" "${version}.hmod" "${version}.hmod.sha256" "IkCore-NESMini-DMG-50-paquete.zip" README-IKCORE-HAKCHI.txt --target "$GITHUB_SHA" --title "Ik Core NES Mini #50 - DMG native fast compositor (TEST)" --notes-file release-notes.md --prerelease
           fi
