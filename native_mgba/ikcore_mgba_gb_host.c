@@ -11,7 +11,6 @@
 #include <mgba/internal/gb/gb.h>
 #include <mgba-util/vfs.h>
 #include <mgba-util/audio-buffer.h>
-#include <mgba-util/formatting.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
