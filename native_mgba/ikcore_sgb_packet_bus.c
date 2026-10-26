@@ -7,6 +7,12 @@
  */
 #include "ikcore_sgb_packet_bus.h"
 #include <string.h>
+#if defined(__GNUC__)
+/* Optional SOUND observer: sends to SPC FIFO as soon as mGBA assembles
+ * a complete packet. The full packet bus remains for graphical commands. */
+extern void ikcore_sgb_audio_sound_packet_hook(const uint8_t *,unsigned)
+    __attribute__((weak));
+#endif
 static ikcore_sgb_packet queue[IKCORE_SGB_PACKET_DEPTH];
 static unsigned read_pos, write_pos, queued, dropped;
 static uint64_t serial;
@@ -25,6 +31,10 @@ void ikcore_sgb_packet_hook(unsigned command,
         ++dropped;
         return;
     }
+#if defined(__GNUC__)
+    if(command==IKCORE_SGB_SOUND_CMD && ikcore_sgb_audio_sound_packet_hook)
+        ikcore_sgb_audio_sound_packet_hook(data,bytes);
+#endif
     if(queued>=IKCORE_SGB_PACKET_DEPTH) {++dropped;return;}
     ikcore_sgb_packet *pkt=&queue[write_pos];
     pkt->serial=++serial;
