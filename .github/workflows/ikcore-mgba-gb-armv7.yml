@@ -103,9 +103,12 @@ jobs:
           cat > armhf-toolchain.cmake <<EOF
           set(CMAKE_SYSTEM_NAME Linux)
           set(CMAKE_SYSTEM_PROCESSOR arm)
-          # Cross-only CMake probes must not link against the Linaro bundled
-          # libstdc++ before the Xenial libm is added at final core link.
-          set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+          # Linaro's C++ compiler self-check links its internal libstdc++
+          # before the Xenial libm. mGBA GB/libretro is C-only, so suppress
+          # this unrelated C++ executable probe while keeping REAL executable
+          # link tests for C functions (e.g. strlcpy is absent in GLIBC 2.23).
+          set(CMAKE_CXX_COMPILER_WORKS TRUE CACHE BOOL "C++ cross compiler trusted" FORCE)
+          set(CMAKE_CXX_ABI_COMPILED TRUE CACHE BOOL "C++ ABI cross compiler trusted" FORCE)
           set(CMAKE_C_COMPILER "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc")
           set(CMAKE_CXX_COMPILER "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-g++")
           set(CMAKE_SYSROOT "$GITHUB_WORKSPACE/xenial-sysroot")
