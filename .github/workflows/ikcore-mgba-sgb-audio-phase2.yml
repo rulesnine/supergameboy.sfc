@@ -63,6 +63,19 @@ jobs:
           /tmp/ikcore-spc-fifo-test | tee IKCORE-SPC-FIFO-TEST.txt
           grep -q 'IKSGB_SPC_FIFO_OK' IKCORE-SPC-FIFO-TEST.txt
 
+      - name: Test C++ adapter to existing Ik Core SPC700 worker symbols
+        run: |
+          set -eux
+          cc -std=c11 -O2 -Wall -Wextra -Werror -c \
+            ikcore-project/native_mgba/ikcore_sgb_audio_fifo.c \
+            -o /tmp/ikcore-spc-audio-fifo.o
+          c++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            ikcore-project/native_mgba/ikcore_spc_sink.cpp \
+            ikcore-project/tests/ikcore_spc_sink_test.cpp \
+            /tmp/ikcore-spc-audio-fifo.o -o /tmp/ikcore-spc-sink-test
+          /tmp/ikcore-spc-sink-test | tee IKCORE-SPC-SINK-TEST.txt
+          grep -q 'IKSPC_SINK_OK' IKCORE-SPC-SINK-TEST.txt
+
       - name: Build mGBA libretro container (upstream requires GBA headers); run GB cartridge only
         run: |
           set -eux
@@ -94,6 +107,7 @@ jobs:
             mgba-host-benchmark.txt
             IKCORE-SOU-TEST.txt
             IKCORE-SPC-FIFO-TEST.txt
+            IKCORE-SPC-SINK-TEST.txt
 
   armhf-core:
     runs-on: ubuntu-22.04
@@ -245,10 +259,17 @@ jobs:
               -o "bridge-armhf/$f.o"
             "$READELF" -h "bridge-armhf/$f.o" | grep -q 'Machine:.*ARM'
           done
+          CXX="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-g++"
+          "$CXX" -O3 -std=gnu++17 -Wall -Wextra -Werror -march=armv7-a \
+            -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard \
+            -fno-exceptions -fno-rtti -c \
+            ikcore-project/native_mgba/ikcore_spc_sink.cpp \
+            -o bridge-armhf/ikcore_spc_sink.o
           "$AR" rcs libikcore_sgb_audio_bridge_armhf_phase2.a bridge-armhf/*.o
           "$AR" t libikcore_sgb_audio_bridge_armhf_phase2.a > bridge-armhf-objects.txt
           grep -q 'ikcore_sou_trn_capture.o' bridge-armhf-objects.txt
           grep -q 'ikcore_sgb_audio_fifo.o' bridge-armhf-objects.txt
+          grep -q 'ikcore_spc_sink.o' bridge-armhf-objects.txt
           sha256sum libikcore_sgb_audio_bridge_armhf_phase2.a \
               >> IKCORE-MGBA-ARMHF-SHA256.txt
           cat > IKCORE-PHASE2-README.txt <<'EOF'
