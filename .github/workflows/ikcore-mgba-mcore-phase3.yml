@@ -113,7 +113,13 @@ jobs:
             -DUSE_MINIZIP=OFF -DUSE_LIBZIP=OFF -DUSE_LZMA=OFF \
             -DUSE_SQLITE3=OFF -DENABLE_SCRIPTING=OFF -DBUILD_LTO=OFF
           cmake --build build-mcore-host --target mgba --parallel 3
-          cc -g -O1 -rdynamic -DIKCORE_MGBA_DIAGNOSTIC -std=c11 -Wall -Wextra -Werror \
+          # mCore ABI contains #ifdef members (ENABLE_VFS, MINIMAL_CORE).
+          # Host MUST use the exact same C_DEFINES as the pinned mGBA library,
+          # otherwise &core->config points to a different offset and crashes.
+          MGBA_DEFINES="$(sed -n 's/^C_DEFINES = //p' build-mcore-host/CMakeFiles/mgba.dir/flags.make)"
+          test -n "$MGBA_DEFINES"
+          echo "IKCORE_HOST_ABI_DEFINES $MGBA_DEFINES"
+          cc $MGBA_DEFINES -g -O1 -rdynamic -DIKCORE_MGBA_DIAGNOSTIC -std=c11 -Wall -Wextra -Werror \
             -I mgba/include -I build-mcore-host/include \
             ikcore-project/native_mgba/ikcore_mgba_gb_host.c \
             ikcore-project/native_mgba/ikcore_sgb_packet_bus.c \
@@ -325,7 +331,10 @@ jobs:
           CC="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc"
           AR="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar"
           NM="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-nm"
-          "$CC" -O3 -std=c11 -fPIC -Wall -Wextra -Werror -march=armv7-a \
+          MGBA_DEFINES="$(sed -n 's/^C_DEFINES = //p' build-gb-only/CMakeFiles/mgba.dir/flags.make)"
+          test -n "$MGBA_DEFINES"
+          echo "IKCORE_ARM_HOST_ABI_DEFINES $MGBA_DEFINES"
+          "$CC" $MGBA_DEFINES -O3 -std=c11 -fPIC -Wall -Wextra -Werror -march=armv7-a \
             -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard \
             -I mgba/include -I build-gb-only/include \
             -c ikcore-project/native_mgba/ikcore_mgba_gb_host.c \
