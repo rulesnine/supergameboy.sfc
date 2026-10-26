@@ -190,6 +190,9 @@ jobs:
           "$READELF" -h "$CORE" | tee dist/ARMHF-ELF.txt
           "$READELF" -V "$CORE" | tee dist/ARMHF-GLIBC.txt
           "$NM" -C "$CORE" > dist/COMBINED-SYMBOLS.txt
+          "$NM" -D "$CORE" | tee dist/EXPORTED-PHASE4-ABI.txt
+          grep -q ikcore_mgba_phase4_link_probe dist/EXPORTED-PHASE4-ABI.txt
+          grep -q ikcore_mgba_phase4_run_one_frame dist/EXPORTED-PHASE4-ABI.txt
           grep -q 'Machine:.*ARM' dist/ARMHF-ELF.txt
           grep -q 'hard-float ABI' dist/ARMHF-ELF.txt
           if grep -Eq 'GLIBC_2\.(2[4-9]|[3-9][0-9])' dist/ARMHF-GLIBC.txt; then
