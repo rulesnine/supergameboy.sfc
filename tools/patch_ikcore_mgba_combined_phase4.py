@@ -73,4 +73,16 @@ newend=end+'''
 #endif'''
 text=text.replace(end,newend,1)
 p.write_text(text,encoding="utf-8")
+
+# Preserve the optional phase4 ABI under Snes9x's --version-script=link.T
+# and LTO -fwhole-program. These are the only extra public symbols; other
+# mGBA/Snes9x internals stay hidden as in the verified #43 core.
+version_script=core/"link.T"
+version=version_script.read_text(encoding="utf-8")
+expected="   global: retro_*;"
+assert version.count(expected)==1
+version=version.replace(expected,
+    "   global: retro_*; ikcore_mgba_phase4_*;",1)
+version_script.write_text(version,encoding="utf-8")
+print("IKCORE_PHASE4 exported optional host bridge ABI via version script")
 print("IKCORE_PHASE4_COMBINED patched Makefile, libretro init/deinit, mGBA symbols")
