@@ -55,7 +55,7 @@ void ikcore_sgb_sound_packet_hook(unsigned cmd,const unsigned char *data,
  * and 2 bytes for each 8-pixel group at offset + (x<<1).
  * Collect 2048 pairs across lines 0..103 to form exactly 4096 bytes.
  */
-void ikcore_sgb_lcd_row_hook(unsigned y,const uint8_t *row,unsigned width) {
+void ikcore_sgb_lcd_row_hook(unsigned y,const uint16_t *row,unsigned width) {
     if (!row || width != IKCORE_SGB_LCD_WIDTH || y>=144 || !queued)
         return;
     Event *e=NULL;
