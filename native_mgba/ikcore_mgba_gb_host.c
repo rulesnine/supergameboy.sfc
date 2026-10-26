@@ -14,6 +14,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef IKCORE_MGBA_DIAGNOSTIC
+#include <stdio.h>
+#define IKHOST_TRACE(x) do {fprintf(stderr,"IKHOST_TRACE %s\n",x);fflush(stderr);}while(0)
+#else
+#define IKHOST_TRACE(x) do {}while(0)
+#endif
 #include <stdbool.h>
 
 struct ikcore_mgba_host {
@@ -38,15 +44,18 @@ ikcore_mgba_host *ikcore_mgba_open(const void *gb_rom,size_t rom_bytes,int sgb_m
     if(!h->rom_data || !h->video) {ikcore_mgba_close(h);return NULL;}
     memcpy(h->rom_data,gb_rom,rom_bytes);
     h->rom_bytes=rom_bytes;
+    IKHOST_TRACE("rom copied");
     /* mCoreFindVF checks for Game Boy / GBX; the caller's source stays owned. */
     struct VFile *vf=VFileFromMemory(h->rom_data,h->rom_bytes);
     if(!vf) {ikcore_mgba_close(h);return NULL;}
+    IKHOST_TRACE("VFile allocated");
     h->core=mCoreFindVF(vf);
     if(!h->core) {
         vf->close(vf);
         ikcore_mgba_close(h);
         return NULL;
     }
+    IKHOST_TRACE("mCore detected");
     mCoreInitConfig(h->core,NULL);
     if(!h->core->init(h->core)) {
         mCoreConfigDeinit(&h->core->config);
@@ -56,6 +65,7 @@ ikcore_mgba_host *ikcore_mgba_open(const void *gb_rom,size_t rom_bytes,int sgb_m
         ikcore_mgba_close(h);
         return NULL;
     }
+    IKHOST_TRACE("mCore initialized");
     /* Full frame uses a single mCore framebuffer, also for SGB 256x224. */
     h->core->setVideoBuffer(h->core,h->video,IKCORE_SGB_SCREEN_W);
     h->core->opts.skipBios=true;   /* No proprietary GB boot ROM in SDK. */
@@ -66,12 +76,14 @@ ikcore_mgba_host *ikcore_mgba_open(const void *gb_rom,size_t rom_bytes,int sgb_m
     /* The GB APU is retained. Native SGB SNES audio gets mixed by Ik Core,
        not from a second GB core. mGBA stereo rate is 131072 Hz. */
     h->core->setAudioBufferSize(h->core,IKCORE_GB_AUDIO_BUFFER_FRAMES);
+    IKHOST_TRACE("mCore framebuffer and APU configured");
     if(!h->core->loadROM(h->core,vf)) {
         /* mGBA may have retained vf on failure; its unloadROM owns cleanup. */
         h->core->unloadROM(h->core);
         ikcore_mgba_close(h);
         return NULL;
     }
+    IKHOST_TRACE("mCore ROM loaded");
     struct GB *gb=(struct GB*)h->core->board;
     if(sgb_mode) {
         gb->model=GB_MODEL_SGB;
@@ -80,7 +92,9 @@ ikcore_mgba_host *ikcore_mgba_open(const void *gb_rom,size_t rom_bytes,int sgb_m
         gb->model=GB_MODEL_DMG;
         mCoreConfigSetDefaultValue(&h->core->config,"gb.model","DMG");
     }
+    IKHOST_TRACE("before GB CPU reset");
     h->core->reset(h->core);
+    IKHOST_TRACE("after GB CPU reset");
     h->model=(unsigned)gb->model;
     /* A reliable SGB session MUST run mGBA as SGB. Otherwise silently
        launching in DMG would drop all SGB SOUND/PAL/CHR/PCT packets. */
@@ -94,7 +108,9 @@ int ikcore_mgba_run(ikcore_mgba_host *host,uint8_t gb_keys,ikcore_mgba_frame *ou
     struct mCore *core=host->core;
     core->setKeys(core,gb_keys);
     const double t0=ik_time_ms();
+    if(host->frame_index==0) IKHOST_TRACE("before first runFrame");
     core->runFrame(core); /* ONE CPU: mGBA. Snes9x GB CPU is NOT running. */
+    if(host->frame_index==0) IKHOST_TRACE("after first runFrame");
     const double t1=ik_time_ms();
     unsigned w=0,ht=0;
     core->currentVideoSize(core,&w,&ht);
@@ -130,9 +146,12 @@ unsigned ikcore_mgba_model(const ikcore_mgba_host *host) {
 void ikcore_mgba_close(ikcore_mgba_host *host) {
     if(!host)return;
     if(host->core) {
+        IKHOST_TRACE("before mCore unload");
         host->core->unloadROM(host->core);
+        IKHOST_TRACE("after mCore unload");
         mCoreConfigDeinit(&host->core->config);
         host->core->deinit(host->core);
+        IKHOST_TRACE("after mCore deinit");
     }
     free(host->rom_data);
     free(host->video);
