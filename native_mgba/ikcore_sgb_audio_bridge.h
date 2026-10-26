@@ -26,7 +26,7 @@ void ikcore_sgb_sound_packet_hook(unsigned command,
                                  const unsigned char *data, unsigned length);
 /* mGBA software-renderer hook: raw 2-bit pixel tokens for one LCD scanline;
  * MUST be called only during sgbTransfer==1 and SGB command SOU_TRN. */
-void ikcore_sgb_lcd_row_hook(unsigned y, const uint8_t *row, unsigned width);
+void ikcore_sgb_lcd_row_hook(unsigned y, const uint16_t *row, unsigned width);
 /* Return false if queue empty, SOU_TRN upload not ready, or sink missing.
  * Never reorder SOUND behind a pending SOU_TRN. */
 bool ikcore_sgb_audio_dispatch_one(const ikcore_sgb_audio_sink *sink);
