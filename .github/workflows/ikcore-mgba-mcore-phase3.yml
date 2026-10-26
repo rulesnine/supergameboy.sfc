@@ -106,14 +106,14 @@ jobs:
         run: |
           set -euxo pipefail
           cmake -S mgba -B build-mcore-host \
-            -DCMAKE_BUILD_TYPE=Release -DM_CORE_GB=ON -DM_CORE_GBA=OFF \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo -DM_CORE_GB=ON -DM_CORE_GBA=OFF \
             -DLIBMGBA_ONLY=ON -DBUILD_LIBRETRO=OFF -DBUILD_STATIC=ON \
             -DBUILD_SHARED=OFF -DBUILD_QT=OFF -DBUILD_SDL=OFF \
             -DDISABLE_DEPS=ON -DUSE_ZLIB=OFF -DUSE_PNG=OFF \
             -DUSE_MINIZIP=OFF -DUSE_LIBZIP=OFF -DUSE_LZMA=OFF \
             -DUSE_SQLITE3=OFF -DENABLE_SCRIPTING=OFF -DBUILD_LTO=OFF
           cmake --build build-mcore-host --target mgba --parallel 3
-          cc -g -O1 -DIKCORE_MGBA_DIAGNOSTIC -std=c11 -Wall -Wextra -Werror \
+          cc -g -O1 -rdynamic -DIKCORE_MGBA_DIAGNOSTIC -std=c11 -Wall -Wextra -Werror \
             -I mgba/include -I build-mcore-host/include \
             ikcore-project/native_mgba/ikcore_mgba_gb_host.c \
             ikcore-project/native_mgba/ikcore_sgb_packet_bus.c \
