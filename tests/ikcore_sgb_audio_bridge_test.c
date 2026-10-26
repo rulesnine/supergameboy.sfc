@@ -23,8 +23,8 @@ static void emit_packet(unsigned command) {
     packet[1]=0x11;packet[2]=0x22;packet[3]=0x33;packet[4]=0x44;
     ikcore_sgb_sound_packet_hook(command,packet,sizeof(packet));
 }
-static void paint_row(unsigned y,uint8_t *row) {
-    memset(row,0,160);
+static void paint_row(unsigned y,uint16_t *row) {
+    memset(row,0,160*sizeof(*row));
     for (unsigned x=0;x<160;x+=8) {
         unsigned o=2*((y&7)+(y>>3)*160)+(x<<1);
         if(o+1>=4096)break;
@@ -45,7 +45,7 @@ int main(void) {
     emit_packet(8);
     assert(ikcore_sgb_audio_queued()==2);
     assert(!ikcore_sgb_audio_dispatch_one(&sink));
-    uint8_t row[160];
+    uint16_t row[160];
     paint_row(1,row);
     ikcore_sgb_lcd_row_hook(1,row,160); /* not start until y=0 */
     assert(ikcore_sgb_audio_completed_transfers()==0);
