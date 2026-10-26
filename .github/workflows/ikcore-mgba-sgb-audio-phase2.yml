@@ -33,7 +33,9 @@ jobs:
           path: mgba
           submodules: false
       - name: Patch complete SGB packet callback and SOU_TRN LCD frame/line transfer
-        run: python3 ikcore-project/tools/patch_mgba_sgb_bridge.py mgba
+        run: |
+          set -eux
+          python3 ikcore-project/tools/patch_mgba_sgb_bridge.py mgba
           python3 ikcore-project/tools/patch_mgba_sou_trn_capture.py mgba
       - name: Verify ordered SGB packet bus before connecting SPC hardware
         run: |
