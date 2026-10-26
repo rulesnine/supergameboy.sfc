@@ -189,7 +189,11 @@ jobs:
             ikcore_mgba_gb_only_armhf_phase1.a > gb-only-archive-objects.txt
           "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-nm" -g \
             ikcore_mgba_gb_only_armhf_phase1.a > gb-only-symbols.txt
-          grep -q 'GBProcessEvents' gb-only-symbols.txt
+          grep -Fxq 'gb.c.o' gb-only-archive-objects.txt
+          if grep -Fxq 'gba.c.o' gb-only-archive-objects.txt; then
+            echo 'GB-only archive unexpectedly contains GBA board' >&2
+            exit 1
+          fi
           sha256sum ikcore_mgba_gb_only_armhf_phase1.a >> IKCORE-MGBA-ARMHF-SHA256.txt
           echo 'Lean static GB engine without GBA/libretro compiled; intended for direct Ik Core audio/SPC bridge.' \
             >> IKCORE-MGBA-PHASE1-STATUS.txt
