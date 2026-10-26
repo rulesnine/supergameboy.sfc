@@ -390,7 +390,7 @@ jobs:
           test -s "$FILE"
           tar -tzf "$FILE" >/dev/null
           sha256sum -c "$FILE.sha256"
-          cat > IKCORE-50-RELEASE-NOTES.txt <<'EOF'
+          cat > IKCORE-v51-RELEASE-NOTES.txt <<'EOF'
           Ik Core v51: experimental native universal GB/SGB compositor for NES Mini.
           Based on user-validated #43. Accelerates no-SGB PAL_SET DMG and BIOS-paletted/no-PCT GB games falling back to
           CPU-intensive 256x224 per-pixel conversion. Uses cached SGB border
@@ -401,15 +401,18 @@ jobs:
           Installation: Hakchi CE -> Modules -> Install extra modules -> HMOD.
           EOF
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$FILE" "$FILE.sha256" README-IKCORE-HAKCHI.txt IKCORE-50-RELEASE-NOTES.txt \
+            gh release upload "$TAG" "$FILE" "$FILE.sha256" README-IKCORE-HAKCHI.txt IKCORE-v51-RELEASE-NOTES.txt \
               --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$TAG" "$FILE" "$FILE.sha256" README-IKCORE-HAKCHI.txt IKCORE-50-RELEASE-NOTES.txt \
+            gh release create "$TAG" "$FILE" "$FILE.sha256" README-IKCORE-HAKCHI.txt IKCORE-v51-RELEASE-NOTES.txt \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "Ik Core NES Mini v51 - Experimental universal GB/SGB fast compositor" \
-              --notes-file IKCORE-50-RELEASE-NOTES.txt \
+              --notes-file IKCORE-v51-RELEASE-NOTES.txt \
               --prerelease
           fi
+          # Drop obsolete notes filename from the first v51 publication.
+          gh release delete-asset "$TAG" "IKCORE-50-RELEASE-NOTES.txt" \
+            --repo "$GITHUB_REPOSITORY" --yes 2>/dev/null || true
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets
 
