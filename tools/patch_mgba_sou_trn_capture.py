@@ -35,20 +35,19 @@ r'''void GBVideoReset(struct GBVideo* video) {
         ikcore_sgb_transfer_reset_hook();
 #endif
 ''',"video reset")
-anchor=r'''		if (ikcore_sgb_packet_hook)
-			ikcore_sgb_packet_hook((unsigned)(video->sgbCommandHeader >> 3),
-			                       video->sgbPacketBuffer,
-			                       (unsigned)video->sgbBufferIndex * 16u);
+anchor=r'''	if (ikcore_sgb_packet_hook)
+		ikcore_sgb_packet_hook((unsigned)(video->sgbCommandHeader >> 3),
+		                       video->sgbPacketBuffer,
+		                       (unsigned)video->sgbBufferIndex * 16u);
 #endif
 	switch (video->sgbCommandHeader >> 3) {'''
-replacement=r'''		if (ikcore_sgb_packet_hook)
-			ikcore_sgb_packet_hook((unsigned)(video->sgbCommandHeader >> 3),
-			                       video->sgbPacketBuffer,
-			                       (unsigned)video->sgbBufferIndex * 16u);
-		// SOU_TRN never reaches software renderer's writeSGBPacket(),
-		// since mGBA doesn't currently implement SGB's SNES audio upload.
-		if (ikcore_sgb_transfer_command_hook)
-			ikcore_sgb_transfer_command_hook((unsigned)(video->sgbCommandHeader >> 3));
+replacement=r'''	if (ikcore_sgb_packet_hook)
+		ikcore_sgb_packet_hook((unsigned)(video->sgbCommandHeader >> 3),
+		                       video->sgbPacketBuffer,
+		                       (unsigned)video->sgbBufferIndex * 16u);
+	// SOU_TRN does not reach renderer->writeSGBPacket (unsupported in mGBA).
+	if (ikcore_sgb_transfer_command_hook)
+		ikcore_sgb_transfer_command_hook((unsigned)(video->sgbCommandHeader >> 3));
 #endif
 	switch (video->sgbCommandHeader >> 3) {'''
 v=rep(v,anchor,replacement,"fully assembled SOU_TRN command observer")
