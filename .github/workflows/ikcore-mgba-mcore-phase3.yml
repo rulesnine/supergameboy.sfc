@@ -113,7 +113,7 @@ jobs:
             -DUSE_MINIZIP=OFF -DUSE_LIBZIP=OFF -DUSE_LZMA=OFF \
             -DUSE_SQLITE3=OFF -DENABLE_SCRIPTING=OFF -DBUILD_LTO=OFF
           cmake --build build-mcore-host --target mgba --parallel 3
-          cc -O2 -std=c11 -Wall -Wextra -Werror \
+          cc -g -O1 -DIKCORE_MGBA_DIAGNOSTIC -std=c11 -Wall -Wextra -Werror \
             -I mgba/include -I build-mcore-host/include \
             ikcore-project/native_mgba/ikcore_mgba_gb_host.c \
             ikcore-project/native_mgba/ikcore_sgb_packet_bus.c \
@@ -125,10 +125,10 @@ jobs:
           # When this newly introduced direct-API host faults, keep a full
           # CI backtrace so we can correct it without NES Mini experiments.
           if ! /tmp/ikcore-mcore-host "$PWD/ikcore-synthetic.gb" | tee ikcore-mcore-host-test.txt; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq gdb
-            gdb -q -batch -ex run -ex 'thread apply all bt' --args \
-              /tmp/ikcore-mcore-host "$PWD/ikcore-synthetic.gb" || true
+            if command -v gdb >/dev/null 2>&1; then
+              timeout 12 gdb -q -batch -ex run -ex 'thread apply all bt' --args \
+                /tmp/ikcore-mcore-host "$PWD/ikcore-synthetic.gb" || true
+            fi
             exit 1
           fi
           grep -q 'IKCORE_MCORE_HOST_OK model=DMG frames=240' ikcore-mcore-host-test.txt
