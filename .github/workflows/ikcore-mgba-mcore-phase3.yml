@@ -10,6 +10,8 @@ on:
       - "native_mgba/ikcore_mgba_gb_host.c"
       - "native_mgba/ikcore_mgba_gb_host.h"
       - "tests/ikcore_mgba_gb_host_test.c"
+      - "tools/make_synthetic_sgb_sound_rom.py"
+      - "tests/ikcore_mgba_sgb_joyp_runtime_test.c"
       - "native_mgba/ikcore_sou_trn_capture.c"
       - "native_mgba/ikcore_sou_trn_capture.h"
       - "native_mgba/ikcore_sgb_audio_fifo.c"
@@ -139,6 +141,22 @@ jobs:
           fi
           grep -q 'IKCORE_MCORE_HOST_OK model=DMG frames=240' ikcore-mcore-host-test.txt
           grep -q 'IKCORE_MCORE_HOST_OK model=SGB frames=24' ikcore-mcore-host-test.txt
+          # This exercises the real SM83->JOYP packet decoder, unlike a
+          # fake direct call to ikcore_sgb_packet_hook() in the unit tests.
+          python3 ikcore-project/tools/make_synthetic_sgb_sound_rom.py \
+            ikcore-sgb-sound-test.gb
+          cc $MGBA_DEFINES -O2 -std=c11 -Wall -Wextra -Werror \
+            -I mgba/include -I build-mcore-host/include \
+            ikcore-project/native_mgba/ikcore_mgba_gb_host.c \
+            ikcore-project/native_mgba/ikcore_sgb_packet_bus.c \
+            ikcore-project/native_mgba/ikcore_sgb_audio_fifo.c \
+            ikcore-project/native_mgba/ikcore_sou_trn_capture.c \
+            ikcore-project/tests/ikcore_mgba_sgb_joyp_runtime_test.c \
+            build-mcore-host/libmgba.a -lm -lpthread \
+            -o /tmp/ikcore-mcore-sgb-joyp-test
+          /tmp/ikcore-mcore-sgb-joyp-test "$PWD/ikcore-sgb-sound-test.gb" \
+            | tee IKCORE-SGB-JOYP-RUNTIME-TEST.txt
+          grep -q 'IKCORE_SGB_JOYP_RUNTIME_OK' IKCORE-SGB-JOYP-RUNTIME-TEST.txt
 
       - name: Archive host code-backed benchmark (no ROM)
         uses: actions/upload-artifact@v4
@@ -150,6 +168,7 @@ jobs:
             IKCORE-SPC-FIFO-TEST.txt
             IKCORE-SPC-SINK-TEST.txt
             ikcore-mcore-host-test.txt
+            IKCORE-SGB-JOYP-RUNTIME-TEST.txt
 
   armhf-core:
     runs-on: ubuntu-22.04
