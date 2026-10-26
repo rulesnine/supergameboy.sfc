@@ -73,6 +73,8 @@ bool ikcore_sou_capture_end_frame(ikcore_sou_capture *c,
 #if defined(__GNUC__)
 extern void ikcore_sgb_transfer_completed_hook(const uint8_t *payload,
     unsigned size) __attribute__((weak));
+extern void ikcore_sgb_bus_reset(void) __attribute__((weak));
+extern void ikcore_sgb_audio_reset(void) __attribute__((weak));
 #endif
 static ikcore_sou_capture singleton;
 static void ikcore_sou_emit(const uint8_t *payload,unsigned size,void *ctx) {
@@ -86,6 +88,12 @@ static void ikcore_sou_emit(const uint8_t *payload,unsigned size,void *ctx) {
 }
 void ikcore_sgb_transfer_reset_hook(void) {
     ikcore_sou_capture_reset(&singleton);
+#if defined(__GNUC__)
+    /* ROM load/reset must never play stale queued SNES effects or program
+     * transfers belonging to the previous cartridge. */
+    if(ikcore_sgb_bus_reset) ikcore_sgb_bus_reset();
+    if(ikcore_sgb_audio_reset) ikcore_sgb_audio_reset();
+#endif
 }
 void ikcore_sgb_transfer_command_hook(unsigned command) {
     if(command==9u)ikcore_sou_capture_arm(&singleton); /* SOU_TRN */
