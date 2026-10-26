@@ -34,7 +34,7 @@ insert=anchor+"""
 extern void ikcore_sgb_sound_packet_hook(unsigned command,
                                         const unsigned char *data,
                                         unsigned bytes) __attribute__((weak));
-extern void ikcore_sgb_lcd_row_hook(unsigned y, const unsigned char *row,
+extern void ikcore_sgb_lcd_row_hook(unsigned y, const unsigned short *row,
                                    unsigned width) __attribute__((weak));
 #endif"""
 video=exactly(video,anchor,insert,"additional sound and LCD callbacks")
@@ -63,7 +63,7 @@ anchor="#include <mgba/internal/gb/renderers/software.h>"
 new=anchor+"""
 
 #if defined(__GNUC__)
-extern void ikcore_sgb_lcd_row_hook(unsigned y, const unsigned char *row,
+extern void ikcore_sgb_lcd_row_hook(unsigned y, const unsigned short *row,
                                    unsigned width) __attribute__((weak));
 #endif"""
 render=exactly(render,anchor,new,"software renderer optional row tap")
