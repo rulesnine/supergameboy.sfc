@@ -1,0 +1,104 @@
+name: Publicar SDK interno Ik Core mGBA MCore fase 3 (NO HMOD)
+on:
+  push:
+    branches:
+      - integracion/mgba-mcore-host-fase3
+    paths:
+      - ".github/workflows/publish-ikcore-mgba-phase3.yml"
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Recuperar y verificar componentes ARMhf y pruebas de CPU única mCore
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          mkdir -p sdk/native_mgba sdk/tools sdk/tests sdk/docs
+          gh run download 40269643549 --repo "$GITHUB_REPOSITORY" \
+             --name IKCORE-MGBA-MCORE-PHASE3-ARMHF --dir sdk
+          gh run download 40269643549 --repo "$GITHUB_REPOSITORY" \
+             --name IKCORE-MGBA-MCORE-PHASE3-HOST --dir sdk
+          (cd sdk && sha256sum -c IKCORE-MGBA-ARMHF-SHA256.txt)
+          test -s sdk/ikcore_mgba_gb_host_armhf_fase3.a
+          test -s sdk/ikcore_mgba_gb_only_armhf_phase1.a
+          test -s sdk/libikcore_sgb_audio_bridge_armhf_phase2.a
+          grep -q 'IKCORE_MCORE_HOST_OK model=DMG frames=240' sdk/ikcore-mcore-host-test.txt
+          grep -q 'IKCORE_MCORE_HOST_OK model=SGB frames=24' sdk/ikcore-mcore-host-test.txt
+          grep -q 'IKCORE_SGB_JOYP_RUNTIME_OK' sdk/IKCORE-SGB-JOYP-RUNTIME-TEST.txt
+          grep -q 'IKSOU_CAPTURE_OK' sdk/IKCORE-SOU-TEST.txt
+          grep -q 'IKSGB_SPC_FIFO_OK' sdk/IKCORE-SPC-FIFO-TEST.txt
+          grep -q 'IKSPC_SINK_OK' sdk/IKCORE-SPC-SINK-TEST.txt
+          cp docs/FASE{1,2,3}*md sdk/docs/
+          cp native_mgba/ikcore_* sdk/native_mgba/
+          cp tools/patch_mgba_sgb_bridge.py tools/patch_mgba_sou_trn_capture.py \
+            tools/make_synthetic_sgb_sound_rom.py tools/make_synthetic_gb_rom.py \
+            sdk/tools/
+          cp tests/ikcore_mgba_gb_host_test.c \
+             tests/ikcore_mgba_sgb_joyp_runtime_test.c sdk/tests/
+          curl -fLsS \
+            'https://raw.githubusercontent.com/mgba-emu/mgba/1509d86028c7df2d844b590723a80b2978f49e7c/LICENSE' \
+            -o sdk/LICENSE-mGBA-MPL-2.0.txt
+          cat > sdk/NO-INSTALAR-COMO-HMOD.txt <<'EOF'
+          SDK DE DESARROLLO - IK CORE HIBRIDO mGBA / mCore FASE 3
+          =========================================================
+          ESTO NO ES UN HMOD PARA HAKCHI.
+          El nucleo GB mGBA de CPU UNICA compila ARMv7 para NES Mini.
+          En PC ejecuta 240 cuadros DMG y 24 SGB; comandos SGB JOYP SOUND
+          llegan al FIFO Ik Core. ESTA NO ES UNA PRUEBA DE AUDIO SPC700.
+          El enlace real a la SNES/APU Snes9x aun no esta instalado.
+          Tampoco hay benchmark de NES Mini o juego comercial.
+          Conserva instalada y sin modificar Ik Core #43.
+          Consulta docs/FASE3_MGBA_MCORE_HOST.md.
+          Todos los cambios fuente mGBA llevan la licencia MPL 2.0.
+          No incluye ROMs de juegos, firmware ni BIOS propietarios.
+          EOF
+          (cd sdk && zip -q -9 -r ../IkCore-Hibrido-mGBA-MCore-Fase3-SDK.zip .)
+          unzip -t IkCore-Hibrido-mGBA-MCore-Fase3-SDK.zip | tail -n 2
+          sha256sum IkCore-Hibrido-mGBA-MCore-Fase3-SDK.zip \
+             > IkCore-Hibrido-mGBA-MCore-Fase3-SDK.zip.sha256
+
+      - name: Publicar descarga de Fase 3 sin instalar HMOD
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          TAG="ikcore-mgba-mcore-phase3-sdk"
+          cat > NOTES.md <<'EOF'
+          # Ik Core híbrido — Fase 3 (SDK técnico; NO HMOD)
+
+          - Núcleo GB mGBA real, **una sola CPU Game Boy** con acceso
+            a vídeo, audio PCM, controles y API SRAM.
+          - **240 cuadros en modo DMG y 24 en SGB** ejecutados en CI x86.
+          - ROM sintética propia emite SOUND por FF00/JOYP; mGBA la
+            interpreta y la entrega una sola vez a la cola SGB de Ik Core.
+          - Biblioteca del ejecutor y puente SGB compilados para ARMhf
+            compatible con GLIBC 2.23 de la NES Mini.
+          - Corregido un fallo ABI mCore: el host debe compilarse con las
+            mismas definiciones de configuración que la biblioteca mGBA.
+
+          **NO es instalable ni demuestra 60 FPS en NES Mini.**
+          Falta incorporar el motor GB al ejecutable completo Snes9x
+          y activar el audio SPC700/DSP real; eso NO está validado.
+          Ik Core #43 permanece sin cambios.
+
+          ZIP: bibliotecas ARM, código fuente, pruebas, documentación y MPL-2.0.
+          No incluye juegos comerciales, BIOS ni firmware.
+          EOF
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" IkCore-Hibrido-mGBA-MCore-Fase3-SDK.zip \
+                IkCore-Hibrido-mGBA-MCore-Fase3-SDK.zip.sha256 \
+                --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" IkCore-Hibrido-mGBA-MCore-Fase3-SDK.zip \
+              IkCore-Hibrido-mGBA-MCore-Fase3-SDK.zip.sha256 \
+              --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Ik Core híbrido mGBA MCore - Fase 3 (SDK, NO HMOD)" \
+              --notes-file NOTES.md --prerelease
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets
