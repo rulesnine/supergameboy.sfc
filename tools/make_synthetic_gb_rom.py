@@ -32,7 +32,7 @@ rom[0x14F]=total&0xFF
 # or a standards-based GBX metadata trailer. Use the latter so NO Nintendo
 # logo or proprietary bytes need appear in a synthetic test cartridge.
 footer=bytearray(64)
-footer[0:4]=b"ROM\\x00" # MBC-none FourCC
+footer[0:4]=b"ROM"+bytes([0]) # MBC-none FourCC
 footer[8:12]=(len(rom)).to_bytes(4,"big")
 footer[12:16]=(0).to_bytes(4,"big")
 footer[48:52]=(64).to_bytes(4,"big")
