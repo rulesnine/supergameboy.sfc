@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Recuperar resultados verificados de ambos compiladores
         env:
-          GH_TOKEN: \${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
           mkdir -p sdk
@@ -47,7 +47,7 @@ jobs:
 
       - name: Publicar enlace persistente en GitHub Releases
         env:
-          GH_TOKEN: \${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
           TAG="ikcore-mgba-gb-armhf-phase1-sdk"
