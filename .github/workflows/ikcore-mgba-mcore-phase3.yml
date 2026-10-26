@@ -1,0 +1,356 @@
+name: Ik Core mCore single-CPU GB host — ARMv7 fase 3 (NO HMOD)
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - integracion/mgba-mcore-host-fase3
+    paths:
+      - ".github/workflows/ikcore-mgba-mcore-phase3.yml"
+      - "tools/patch_mgba_sou_trn_capture.py"
+      - "native_mgba/ikcore_mgba_gb_host.c"
+      - "native_mgba/ikcore_mgba_gb_host.h"
+      - "tests/ikcore_mgba_gb_host_test.c"
+      - "native_mgba/ikcore_sou_trn_capture.c"
+      - "native_mgba/ikcore_sou_trn_capture.h"
+      - "native_mgba/ikcore_sgb_audio_fifo.c"
+      - "native_mgba/ikcore_sgb_audio_fifo.h"
+      - "native_mgba/ikcore_sgb_packet_bus.c"
+      - "tests/ikcore_sou_trn_capture_test.c"
+      - "tests/ikcore_sgb_audio_fifo_test.c"
+      - "tools/patch_mgba_sgb_bridge.py"
+      - "tools/make_synthetic_gb_rom.py"
+      - "tests/mgba_libretro_smoke.c"
+permissions:
+  contents: read
+jobs:
+  host-runtime:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ikcore-project
+      - uses: actions/checkout@v4
+        with:
+          repository: mgba-emu/mgba
+          ref: 1509d86028c7df2d844b590723a80b2978f49e7c
+          path: mgba
+          submodules: false
+      - name: Patch complete SGB packet callback and SOU_TRN LCD frame/line transfer
+        run: |
+          set -eux
+          python3 ikcore-project/tools/patch_mgba_sgb_bridge.py mgba
+          python3 ikcore-project/tools/patch_mgba_sou_trn_capture.py mgba
+      - name: Verify ordered SGB packet bus before connecting SPC hardware
+        run: |
+          set -eux
+          cc -std=c11 -O2 -Wall -Wextra -Werror \
+            ikcore-project/native_mgba/ikcore_sgb_packet_bus.c \
+            ikcore-project/tests/ikcore_sgb_packet_bus_test.c \
+            -o /tmp/ikcore-sgb-bus-test
+          /tmp/ikcore-sgb-bus-test | tee ikcore-sgb-bus-test.txt
+          grep -q 'IKSGB_BUS_OK' ikcore-sgb-bus-test.txt
+      - name: Validate 4 KiB SOU_TRN transfer and the SPC FIFO before hardware
+        run: |
+          set -eux
+          cc -std=c11 -O2 -Wall -Wextra -Werror \
+            ikcore-project/native_mgba/ikcore_sou_trn_capture.c \
+            ikcore-project/tests/ikcore_sou_trn_capture_test.c \
+            -o /tmp/ikcore-sou-test
+          /tmp/ikcore-sou-test | tee IKCORE-SOU-TEST.txt
+          grep -q 'IKSOU_CAPTURE_OK' IKCORE-SOU-TEST.txt
+          cc -std=c11 -O2 -Wall -Wextra -Werror \
+            ikcore-project/native_mgba/ikcore_sgb_packet_bus.c \
+            ikcore-project/native_mgba/ikcore_sgb_audio_fifo.c \
+            ikcore-project/tests/ikcore_sgb_audio_fifo_test.c \
+            -o /tmp/ikcore-spc-fifo-test
+          /tmp/ikcore-spc-fifo-test | tee IKCORE-SPC-FIFO-TEST.txt
+          grep -q 'IKSGB_SPC_FIFO_OK' IKCORE-SPC-FIFO-TEST.txt
+
+      - name: Test C++ adapter to existing Ik Core SPC700 worker symbols
+        run: |
+          set -eux
+          cc -std=c11 -O2 -Wall -Wextra -Werror -c \
+            ikcore-project/native_mgba/ikcore_sgb_audio_fifo.c \
+            -o /tmp/ikcore-spc-audio-fifo.o
+          c++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            ikcore-project/native_mgba/ikcore_spc_sink.cpp \
+            ikcore-project/tests/ikcore_spc_sink_test.cpp \
+            /tmp/ikcore-spc-audio-fifo.o -o /tmp/ikcore-spc-sink-test
+          /tmp/ikcore-spc-sink-test | tee IKCORE-SPC-SINK-TEST.txt
+          grep -q 'IKSPC_SINK_OK' IKCORE-SPC-SINK-TEST.txt
+
+      - name: Build mGBA libretro container (upstream requires GBA headers); run GB cartridge only
+        run: |
+          set -eux
+          cmake -S mgba -B build-host -DCMAKE_BUILD_TYPE=Release \
+            -DM_CORE_GB=ON -DM_CORE_GBA=ON \
+            -DBUILD_LIBRETRO=ON -DBUILD_QT=OFF -DBUILD_SDL=OFF \
+            -DBUILD_SHARED=OFF -DBUILD_STATIC=OFF -DSKIP_LIBRARY=ON \
+            -DDISABLE_DEPS=ON -DUSE_ZLIB=OFF -DUSE_PNG=OFF \
+            -DUSE_MINIZIP=OFF -DUSE_LIBZIP=OFF -DUSE_LZMA=OFF \
+            -DUSE_SQLITE3=OFF -DENABLE_SCRIPTING=OFF -DBUILD_LTO=OFF \
+            -DBUILD_TEST=OFF -DBUILD_SUITE=OFF -DBUILD_PERF=OFF
+          cmake --build build-host --target mgba_libretro --parallel 3
+          find build-host -type f -name '*libretro.so' -print
+          find build-host -type f -name '*libretro.so' | grep -q .
+      - name: Run synthetic GB ROM for 240 frames; measure CPU work without artificial throttling
+        run: |
+          set -eux
+          python3 ikcore-project/tools/make_synthetic_gb_rom.py ikcore-synthetic.gb
+          cc -O2 -std=gnu11 -I mgba/src/platform/libretro \
+             ikcore-project/tests/mgba_libretro_smoke.c -ldl -o /tmp/ikcore-gb-smoke
+          core="$(find build-host -type f -name '*libretro.so' | head -n1)"
+          /tmp/ikcore-gb-smoke "$PWD/$core" "$PWD/ikcore-synthetic.gb" 240 | tee mgba-host-benchmark.txt
+          grep -q 'IKMGBA_OK runs=240' mgba-host-benchmark.txt
+      - name: Build and execute mCore GB-only host — DMG 240 frames and SGB 24 frames
+        run: |
+          set -euxo pipefail
+          cmake -S mgba -B build-mcore-host \
+            -DCMAKE_BUILD_TYPE=Release -DM_CORE_GB=ON -DM_CORE_GBA=OFF \
+            -DLIBMGBA_ONLY=ON -DBUILD_LIBRETRO=OFF -DBUILD_STATIC=ON \
+            -DBUILD_SHARED=OFF -DBUILD_QT=OFF -DBUILD_SDL=OFF \
+            -DDISABLE_DEPS=ON -DUSE_ZLIB=OFF -DUSE_PNG=OFF \
+            -DUSE_MINIZIP=OFF -DUSE_LIBZIP=OFF -DUSE_LZMA=OFF \
+            -DUSE_SQLITE3=OFF -DENABLE_SCRIPTING=OFF -DBUILD_LTO=OFF
+          cmake --build build-mcore-host --target mgba --parallel 3
+          cc -O2 -std=c11 -Wall -Wextra -Werror \
+            -I mgba/include -I build-mcore-host/include \
+            ikcore-project/native_mgba/ikcore_mgba_gb_host.c \
+            ikcore-project/native_mgba/ikcore_sgb_packet_bus.c \
+            ikcore-project/native_mgba/ikcore_sgb_audio_fifo.c \
+            ikcore-project/native_mgba/ikcore_sou_trn_capture.c \
+            ikcore-project/tests/ikcore_mgba_gb_host_test.c \
+            build-mcore-host/libmgba.a -lm -lpthread \
+            -o /tmp/ikcore-mcore-host
+          /tmp/ikcore-mcore-host "$PWD/ikcore-synthetic.gb" | tee ikcore-mcore-host-test.txt
+          grep -q 'IKCORE_MCORE_HOST_OK model=DMG frames=240' ikcore-mcore-host-test.txt
+          grep -q 'IKCORE_MCORE_HOST_OK model=SGB frames=24' ikcore-mcore-host-test.txt
+
+      - name: Archive host code-backed benchmark (no ROM)
+        uses: actions/upload-artifact@v4
+        with:
+          name: IKCORE-MGBA-MCORE-PHASE3-HOST
+          path: |
+            mgba-host-benchmark.txt
+            IKCORE-SOU-TEST.txt
+            IKCORE-SPC-FIFO-TEST.txt
+            IKCORE-SPC-SINK-TEST.txt
+            ikcore-mcore-host-test.txt
+
+  armhf-core:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ikcore-project
+      - uses: actions/checkout@v4
+        with:
+          repository: mgba-emu/mgba
+          ref: 1509d86028c7df2d844b590723a80b2978f49e7c
+          path: mgba
+          submodules: false
+      - uses: actions/checkout@v4
+        with:
+          repository: MayuriLabs/linaro_arm-linux-gnueabihf-7.5
+          ref: master
+          path: toolchain
+          fetch-depth: 1
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y file dpkg-dev bc cmake
+      - name: Build original NES Mini-compatible Xenial ARMhf sysroot
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p xenial-debs xenial-sysroot
+          docker run --rm -v "$GITHUB_WORKSPACE/xenial-debs:/out" ubuntu:16.04 bash -ec '
+            printf "%s\n" \
+              "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial main universe" \
+              "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial-updates main universe" \
+              "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial-security main universe" \
+              > /etc/apt/sources.list
+            apt-get update
+            cd /out
+            apt-get download libc6:armhf libc6-dev:armhf linux-libc-dev:armhf libstdc++6:armhf libgcc1:armhf
+          '
+          for pkg in "$GITHUB_WORKSPACE"/xenial-debs/*.deb; do
+            dpkg-deb -x "$pkg" "$GITHUB_WORKSPACE/xenial-sysroot"
+          done
+          test -e xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6
+          test -e xenial-sysroot/usr/include/stdio.h
+      - name: Patch mGBA SGB packet callback and cross-compile native GB core
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 ikcore-project/tools/patch_mgba_sgb_bridge.py mgba
+          python3 ikcore-project/tools/patch_mgba_sou_trn_capture.py mgba
+          # Xenial's ARMhf linker scripts may select non-PIC libm.a.
+          # Explicitly use the dynamic GLIBC 2.23 libm.so.6 for the .so.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("mgba/CMakeLists.txt")
+          text=p.read_text()
+          assert text.count("set(M_LIBRARY m)")==1
+          dynamic=str((Path.cwd()/"xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6").resolve())
+          assert Path(dynamic).is_file(), dynamic
+          text=text.replace("set(M_LIBRARY m)", 'set(M_LIBRARY "'+dynamic+'")')
+          p.write_text(text)
+          print("IKMGBA armhf libm pinned", dynamic)
+          PY
+
+          cat > armhf-toolchain.cmake <<EOF
+          set(CMAKE_SYSTEM_NAME Linux)
+          set(CMAKE_SYSTEM_PROCESSOR arm)
+          # Linaro's C++ compiler self-check links its internal libstdc++
+          # before the Xenial libm. mGBA GB/libretro is C-only, so suppress
+          # this unrelated C++ executable probe while keeping REAL executable
+          # link tests for C functions (e.g. strlcpy is absent in GLIBC 2.23).
+          set(CMAKE_CXX_COMPILER_WORKS TRUE CACHE BOOL "C++ cross compiler trusted" FORCE)
+          set(CMAKE_CXX_ABI_COMPILED TRUE CACHE BOOL "C++ ABI cross compiler trusted" FORCE)
+          set(CMAKE_C_COMPILER "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc")
+          set(CMAKE_CXX_COMPILER "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-g++")
+          set(CMAKE_SYSROOT "$GITHUB_WORKSPACE/xenial-sysroot")
+          set(CMAKE_C_COMPILER_TARGET "arm-linux-gnueabihf")
+          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+          EOF
+          cmake -S mgba -B build-armhf \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/armhf-toolchain.cmake" \
+            -DCMAKE_C_FLAGS="-O3 -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard" \
+            -DCMAKE_BUILD_TYPE=Release -DM_CORE_GB=ON -DM_CORE_GBA=ON \
+            -DBUILD_LIBRETRO=ON -DBUILD_QT=OFF -DBUILD_SDL=OFF \
+            -DBUILD_SHARED=OFF -DBUILD_STATIC=OFF -DSKIP_LIBRARY=ON \
+            -DDISABLE_DEPS=ON -DUSE_ZLIB=OFF -DUSE_PNG=OFF \
+            -DUSE_MINIZIP=OFF -DUSE_LIBZIP=OFF -DUSE_LZMA=OFF \
+            -DUSE_SQLITE3=OFF -DENABLE_SCRIPTING=OFF -DBUILD_LTO=OFF \
+            -DBUILD_TEST=OFF -DBUILD_SUITE=OFF -DBUILD_PERF=OFF
+          cmake --build build-armhf --target mgba_libretro --parallel 3
+          core="$(find build-armhf -type f -name '*libretro.so' | head -n1)"
+          test -n "$core"
+          readelf="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf"
+          "$readelf" -h "$core" | tee armhf-elf.txt
+          "$readelf" -V "$core" | tee armhf-versions.txt
+          grep -q 'Machine:.*ARM' armhf-elf.txt
+          grep -q 'hard-float ABI' armhf-elf.txt
+          if grep -Eq 'GLIBC_2\.(2[4-9]|[3-9][0-9])' armhf-versions.txt; then
+             echo "FAIL: mGBA requires newer GLIBC than NES Mini's 2.23" >&2
+             exit 1
+          fi
+          cp "$core" ikcore_mgba_gb_armhf_phase1.so
+          "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-strip" \
+             --strip-unneeded ikcore_mgba_gb_armhf_phase1.so
+          sha256sum ikcore_mgba_gb_armhf_phase1.so > IKCORE-MGBA-ARMHF-SHA256.txt
+          printf '%s\n' \
+            'ARMhf mGBA core compiled; GB cartridge path smoke tested on host; upstream libretro also links dormant GBA support (PHASE 1).' \
+            'SGB audio SPC700/DSP is not connected. DO NOT INSTALL AS HMOD.' \
+            'mGBA code: MPL-2.0. mGBA upstream pinned: 1509d86028c7df2d844b590723a80b2978f49e7c.' \
+            'Ik Core #43 is unaffected.' > IKCORE-MGBA-PHASE1-STATUS.txt
+      - name: Build lean Game Boy-only ARMhf static engine without GBA or libretro frontend
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S mgba -B build-gb-only \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/armhf-toolchain.cmake" \
+            -DCMAKE_C_FLAGS="-O3 -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard" \
+            -DCMAKE_BUILD_TYPE=Release -DM_CORE_GB=ON -DM_CORE_GBA=OFF \
+            -DLIBMGBA_ONLY=ON -DBUILD_LIBRETRO=OFF \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_STATIC=ON -DBUILD_SHARED=OFF -DBUILD_LTO=OFF
+          cmake --build build-gb-only --target mgba --parallel 3
+          archive="$(find build-gb-only -type f -name '*.a' | head -n1)"
+          test -n "$archive" && test -s "$archive"
+          cp "$archive" ikcore_mgba_gb_only_armhf_phase1.a
+          "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar" t \
+            ikcore_mgba_gb_only_armhf_phase1.a > gb-only-archive-objects.txt
+          "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-nm" -g \
+            ikcore_mgba_gb_only_armhf_phase1.a > gb-only-symbols.txt
+          grep -Fxq 'gb.c.o' gb-only-archive-objects.txt
+          if grep -Fxq 'gba.c.o' gb-only-archive-objects.txt; then
+            echo 'GB-only archive unexpectedly contains GBA board' >&2
+            exit 1
+          fi
+          sha256sum ikcore_mgba_gb_only_armhf_phase1.a >> IKCORE-MGBA-ARMHF-SHA256.txt
+          echo 'Lean static GB engine without GBA/libretro compiled; intended for direct Ik Core audio/SPC bridge.' \
+            >> IKCORE-MGBA-PHASE1-STATUS.txt
+
+      - name: Build native ARMhf SGB LCD/SOUND/SOU_TRN transport components
+        shell: bash
+        run: |
+          set -euxo pipefail
+          CC="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc"
+          AR="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar"
+          READELF="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf"
+          mkdir -p bridge-armhf
+          for f in ikcore_sgb_packet_bus ikcore_sou_trn_capture ikcore_sgb_audio_fifo; do
+            "$CC" -O3 -std=c11 -Wall -Wextra -Werror -march=armv7-a \
+              -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard \
+              -c "ikcore-project/native_mgba/$f.c" \
+              -o "bridge-armhf/$f.o"
+            "$READELF" -h "bridge-armhf/$f.o" | grep -q 'Machine:.*ARM'
+          done
+          CXX="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-g++"
+          "$CXX" -O3 -std=gnu++17 -Wall -Wextra -Werror -march=armv7-a \
+            -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard \
+            -fno-exceptions -fno-rtti -c \
+            ikcore-project/native_mgba/ikcore_spc_sink.cpp \
+            -o bridge-armhf/ikcore_spc_sink.o
+          "$AR" rcs libikcore_sgb_audio_bridge_armhf_phase2.a bridge-armhf/*.o
+          "$AR" t libikcore_sgb_audio_bridge_armhf_phase2.a > bridge-armhf-objects.txt
+          grep -q 'ikcore_sou_trn_capture.o' bridge-armhf-objects.txt
+          grep -q 'ikcore_sgb_audio_fifo.o' bridge-armhf-objects.txt
+          grep -q 'ikcore_spc_sink.o' bridge-armhf-objects.txt
+          sha256sum libikcore_sgb_audio_bridge_armhf_phase2.a \
+              >> IKCORE-MGBA-ARMHF-SHA256.txt
+          cat > IKCORE-PHASE2-README.txt <<'EOF'
+          PHASE 2: NOT AN HMOD; do not install in Hakchi.
+          Game Boy engine: mGBA, ARMhf GB-only static core and libretro module.
+          SGB AUDIO: six-frame delayed SOU_TRN 4096-byte 2-bpp LCD capture;
+          ordered FIFO SOUND and SOU_TRN events, tested with synthetic data.
+          SPC700/DSP of Ik Core #43: NOT YET LINKED.
+          ROM, firmware and #43 HMOD: unchanged.
+          EOF
+
+      - name: Build single-CPU Ik Core mCore GB host for NES Mini
+        shell: bash
+        run: |
+          set -euxo pipefail
+          CC="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc"
+          AR="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar"
+          NM="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-nm"
+          "$CC" -O3 -std=c11 -fPIC -Wall -Wextra -Werror -march=armv7-a \
+            -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard \
+            -I mgba/include -I build-gb-only/include \
+            -c ikcore-project/native_mgba/ikcore_mgba_gb_host.c \
+            -o ikcore_mgba_gb_host_armhf.o
+          "$AR" rcs libikcore_mgba_gb_host_armhf_fase3.a ikcore_mgba_gb_host_armhf.o
+          "$NM" -g libikcore_mgba_gb_host_armhf_fase3.a | tee host-armhf-symbols.txt
+          grep -q ' T ikcore_mgba_run' host-armhf-symbols.txt
+          grep -q ' T ikcore_mgba_clone_sram' host-armhf-symbols.txt
+          grep -q ' U mCoreFindVF' host-armhf-symbols.txt
+          sha256sum libikcore_mgba_gb_host_armhf_fase3.a \
+            >> IKCORE-MGBA-ARMHF-SHA256.txt
+          cat > FASE3-NO-INSTALAR.txt <<'EOF'
+          FASE 3: mCore GB-only host ARMhf compiled with video, audio, buttons,
+          SRAM and (opt-in) SGB model. No double Game Boy CPU.
+          Not yet linked to the NES Mini Snes9x production core or SNES SPC
+          audio. Not a usable HMOD; keep user-validated #43 unchanged.
+          EOF
+
+      - name: Archive ARMhf native GB engine (NOT an installable HMOD)
+        uses: actions/upload-artifact@v4
+        with:
+          name: IKCORE-MGBA-MCORE-PHASE3-ARMHF
+          path: |
+            ikcore_mgba_gb_armhf_phase1.so
+            libikcore_mgba_gb_host_armhf_fase3.a
+            host-armhf-symbols.txt
+            FASE3-NO-INSTALAR.txt
+            libikcore_sgb_audio_bridge_armhf_phase2.a
+            bridge-armhf-objects.txt
+            IKCORE-PHASE2-README.txt
+            ikcore_mgba_gb_only_armhf_phase1.a
+            gb-only-archive-objects.txt
+            IKCORE-MGBA-ARMHF-SHA256.txt
+            IKCORE-MGBA-PHASE1-STATUS.txt
+            armhf-elf.txt
+            armhf-versions.txt
