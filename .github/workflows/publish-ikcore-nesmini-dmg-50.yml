@@ -1,0 +1,71 @@
+name: Publicar Ik Core NES Mini #50 DMG Acelerado
+on:
+  push:
+    branches:
+      - distribucion/ikcore-nesmini-descargas-hmod
+    paths:
+      - .github/workflows/publish-ikcore-nesmini-dmg-50.yml
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Descargar y verificar #50 compilado
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          artifact="IkCore-EXPERIMENTAL-DMG-COMPOSITOR-51"
+          gh run download 40257894797 --repo "$repo" --name "$artifact" --dir compiled
+          test -s "compiled/${artifact}.hmod"
+          tar -tzf "compiled/${artifact}.hmod" >/dev/null
+          (cd compiled && sha256sum -c "${artifact}.hmod.sha256")
+          mkdir -p downloads
+          cp "compiled/${artifact}.hmod" downloads/IkCore-NESMini-v50-DMG-FAST.hmod
+          cp "compiled/README-IKCORE-HAKCHI.txt" downloads/LEEME-IKCORE-DMG-50.txt
+          (cd downloads && sha256sum IkCore-NESMini-v50-DMG-FAST.hmod > IkCore-NESMini-v50-DMG-FAST.hmod.sha256)
+          (cd downloads && zip -q -9 IkCore-NESMini-v50-DMG-FAST-PACK.zip IkCore-NESMini-v50-DMG-FAST.hmod IkCore-NESMini-v50-DMG-FAST.hmod.sha256 LEEME-IKCORE-DMG-50.txt)
+      - name: Publicar enlace directo permanente en GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="ikcore-nesmini-v50-dmg-fast-experimental"
+          repo="$GITHUB_REPOSITORY"
+          cat > notes.md <<'EOF'
+          # Ik Core NES Mini #50 - DMG Fast Compositor (experimental)
+
+          **Castlevania II: Belmont's Revenge** was reported at **22.5 FPS**
+          on the previous experimental build. The #43 compositor has a fast path
+          for games with SGB palettes, but monochrome Game Boy rendering falls
+          through to an expensive generic pixel-by-pixel format conversion.
+
+          This #50 experiment adds a native DMG fast compositor, with cached
+          256x224 border and preconverted three (BG, OBJ0, OBJ1) times four
+          Game Boy shades per frame. The existing #43 SGB fast path, emulated
+          CPU/PPU, SPC700/DSP, ALSA, ROM, BIOS and masks are untouched.
+
+          **Experimental. No measured NES Mini FPS yet!** Do not assume it
+          fixes the 22 FPS issue until user test. To test, use launcher
+          `/bin/ikcore-dmg-fast-test` on a separate Belmont's Revenge entry.
+          Check for `IKDMG fast compositor active` and the logged FPS.
+
+          The files are copies of the GitHub Actions build in run
+          40257894797 (internal run number 51), renamed solely for clarity
+          as version #50. SHA256 is provided. The build itself succeeded.
+          No proprietary game ROM or SGB firmware distributed.
+          EOF
+          if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+            gh release upload "$tag" downloads/* --repo "$repo" --clobber
+          else
+            gh release create "$tag" downloads/* --repo "$repo" --target "$GITHUB_SHA" --title "Ik Core NES Mini #50 - DMG fast video TEST" --notes-file notes.md --prerelease
+          fi
+          gh release view "$tag" --repo "$repo" --json url,assets
