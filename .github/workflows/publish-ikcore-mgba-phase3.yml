@@ -25,7 +25,7 @@ jobs:
           gh run download 40269643549 --repo "$GITHUB_REPOSITORY" \
              --name IKCORE-MGBA-MCORE-PHASE3-HOST --dir sdk
           (cd sdk && sha256sum -c IKCORE-MGBA-ARMHF-SHA256.txt)
-          test -s sdk/ikcore_mgba_gb_host_armhf_fase3.a
+          test -s sdk/libikcore_mgba_gb_host_armhf_fase3.a
           test -s sdk/ikcore_mgba_gb_only_armhf_phase1.a
           test -s sdk/libikcore_sgb_audio_bridge_armhf_phase2.a
           grep -q 'IKCORE_MCORE_HOST_OK model=DMG frames=240' sdk/ikcore-mcore-host-test.txt
