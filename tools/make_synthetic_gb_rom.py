@@ -28,5 +28,16 @@ rom[0x14D]=value
 total=sum(rom[:0x14E])+sum(rom[0x150:])
 rom[0x14E]=(total>>8)&0xFF
 rom[0x14F]=total&0xFF
+# mGBA's cartridge detector accepts either a registered brand-logo sequence
+# or a standards-based GBX metadata trailer. Use the latter so NO Nintendo
+# logo or proprietary bytes need appear in a synthetic test cartridge.
+footer=bytearray(64)
+footer[0:4]=b"ROM\\x00" # MBC-none FourCC
+footer[8:12]=(len(rom)).to_bytes(4,"big")
+footer[12:16]=(0).to_bytes(4,"big")
+footer[48:52]=(64).to_bytes(4,"big")
+footer[52:56]=(1).to_bytes(4,"big")
+footer[60:64]=b"GBX!"
+rom.extend(footer)
 path.write_bytes(rom)
-print(f"IKCORE_SYNTHETIC_ROM {path} bytes={len(rom)} header={value:02X}")
+print(f"IKCORE_SYNTHETIC_GBX {path} bytes={len(rom)} header={value:02X}")
