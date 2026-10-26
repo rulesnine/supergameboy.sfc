@@ -122,7 +122,15 @@ jobs:
             ikcore-project/tests/ikcore_mgba_gb_host_test.c \
             build-mcore-host/libmgba.a -lm -lpthread \
             -o /tmp/ikcore-mcore-host
-          /tmp/ikcore-mcore-host "$PWD/ikcore-synthetic.gb" | tee ikcore-mcore-host-test.txt
+          # When this newly introduced direct-API host faults, keep a full
+          # CI backtrace so we can correct it without NES Mini experiments.
+          if ! /tmp/ikcore-mcore-host "$PWD/ikcore-synthetic.gb" | tee ikcore-mcore-host-test.txt; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq gdb
+            gdb -q -batch -ex run -ex 'thread apply all bt' --args \
+              /tmp/ikcore-mcore-host "$PWD/ikcore-synthetic.gb" || true
+            exit 1
+          fi
           grep -q 'IKCORE_MCORE_HOST_OK model=DMG frames=240' ikcore-mcore-host-test.txt
           grep -q 'IKCORE_MCORE_HOST_OK model=SGB frames=24' ikcore-mcore-host-test.txt
 
