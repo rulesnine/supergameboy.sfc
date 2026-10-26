@@ -38,7 +38,7 @@ static uint8_t ikcore_map_snes_pad(uint16_t mask)
     return buttons;
 }
 
-extern "C" int ikcore_mgba_phase4_link_probe(void)
+extern "C" __attribute__((used, externally_visible, noinline)) int ikcore_mgba_phase4_link_probe(void)
 {
     /* Deliberate unresolved-in-absence-of-mGBA calls; compilation/linking
      * demonstrates real co-residence of the GB engine and Snes9x APU. */
@@ -47,7 +47,7 @@ extern "C" int ikcore_mgba_phase4_link_probe(void)
     return model == 255 && count <= IKCORE_SGB_AUDIO_CAPACITY ? 0 : -1;
 }
 
-extern "C" void ikcore_mgba_phase4_stop(void)
+extern "C" __attribute__((used, externally_visible, noinline)) void ikcore_mgba_phase4_stop(void)
 {
     if(ikcore_combined_gb) {
         ikcore_mgba_close(ikcore_combined_gb);
@@ -60,7 +60,7 @@ extern "C" void ikcore_mgba_phase4_stop(void)
 /* Only the caller owns the loaded Game Boy bytes. mGBA clones the ROM.
  * Intended to be called once at startup, NOT after #43 has run the cart to
  * an arbitrary point: starting the same GB ROM later loses all its state. */
-extern "C" int ikcore_mgba_phase4_prepare(const uint8_t *rom,size_t bytes)
+extern "C" __attribute__((used, externally_visible, noinline)) int ikcore_mgba_phase4_prepare(const uint8_t *rom,size_t bytes)
 {
     if(ikcore_combined_gb || !rom || !bytes) return 0;
     ikcore_sgb_audio_reset();
@@ -72,7 +72,7 @@ extern "C" int ikcore_mgba_phase4_prepare(const uint8_t *rom,size_t bytes)
  * This is called on the GB producer thread, while the existing parallel SPC
  * worker owns the SNES APU. The worker's Begin/End frame calls still belong
  * to the Snes9x host and MUST bracket this function when it is enabled. */
-extern "C" int ikcore_mgba_phase4_run_one_frame(uint16_t snes_pad)
+extern "C" __attribute__((used, externally_visible, noinline)) int ikcore_mgba_phase4_run_one_frame(uint16_t snes_pad)
 {
     if(!ikcore_combined_gb) return 0;
     if(!ikcore_mgba_run(ikcore_combined_gb,
@@ -85,12 +85,12 @@ extern "C" int ikcore_mgba_phase4_run_one_frame(uint16_t snes_pad)
     return 1;
 }
 
-extern "C" const ikcore_mgba_frame *ikcore_mgba_phase4_latest_frame(void)
+extern "C" __attribute__((used, externally_visible, noinline)) const ikcore_mgba_frame *ikcore_mgba_phase4_latest_frame(void)
 {
     return ikcore_combined_gb ? &ikcore_combined_frame : nullptr;
 }
 
-extern "C" int ikcore_mgba_phase4_is_prepared(void)
+extern "C" __attribute__((used, externally_visible, noinline)) int ikcore_mgba_phase4_is_prepared(void)
 {
     return ikcore_combined_gb ? 1 : 0;
 }
