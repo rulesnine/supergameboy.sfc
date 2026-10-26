@@ -1,0 +1,95 @@
+name: Publicar SDK Ik Core mGBA SGB SPC fase 2 (NO HMOD)
+on:
+  push:
+    branches:
+      - integracion/mgba-sgb-audio-fase2
+    paths:
+      - ".github/workflows/publish-ikcore-mgba-phase2.yml"
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verificar y recuperar los binarios ARMhf y pruebas de la fase 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          mkdir -p sdk/native_mgba sdk/tools sdk/tests
+          gh run download 40267010980 --repo "$GITHUB_REPOSITORY" \
+            --name IKCORE-MGBA-SGB-AUDIO-PHASE2-ARMHF --dir sdk
+          gh run download 40267010980 --repo "$GITHUB_REPOSITORY" \
+            --name IKCORE-MGBA-SGB-AUDIO-PHASE2-HOST --dir sdk
+          test -s sdk/ikcore_mgba_gb_only_armhf_phase1.a
+          test -s sdk/ikcore_mgba_gb_armhf_phase1.so
+          test -s sdk/libikcore_sgb_audio_bridge_armhf_phase2.a
+          (cd sdk && sha256sum -c IKCORE-MGBA-ARMHF-SHA256.txt)
+          grep -q 'IKSOU_CAPTURE_OK' sdk/IKCORE-SOU-TEST.txt
+          grep -q 'IKSGB_SPC_FIFO_OK' sdk/IKCORE-SPC-FIFO-TEST.txt
+          grep -q 'IKSPC_SINK_OK' sdk/IKCORE-SPC-SINK-TEST.txt
+          grep -q 'IKMGBA_OK runs=240' sdk/mgba-host-benchmark.txt
+          cp docs/FASE2_MGBA_SGB_SPC.md sdk/LEEME-Fase2.md
+          cp docs/FASE1_MGBA_GB_ARM.md sdk/LEEME-Fase1.md
+          cp native_mgba/ikcore_* sdk/native_mgba/
+          cp tools/patch_mgba_sgb_bridge.py tools/patch_mgba_sou_trn_capture.py \
+            sdk/tools/
+          cp tests/ikcore_sgb_audio_fifo_test.c tests/ikcore_sou_trn_capture_test.c \
+             tests/ikcore_spc_sink_test.cpp sdk/tests/
+          curl -fLsS \
+            'https://raw.githubusercontent.com/mgba-emu/mgba/1509d86028c7df2d844b590723a80b2978f49e7c/LICENSE' \
+            -o sdk/LICENSE-mGBA-MPL-2.0.txt
+          cat > sdk/NO-INSTALAR-COMO-HMOD.txt <<'EOF'
+          SDK EXPERIMENTAL - IK CORE HIBRIDO + mGBA SGB SPC FASE 2.
+          NO ES UNA HMOD PARA HAKCHI.
+          La biblioteca GB mGBA y el adaptador ARMv7 de audio se compilaron.
+          El puente C++ tiene pruebas con funciones SPC simuladas, NO audio
+          del hardware SNES ya conectado y probado.
+          No instalar en la NES Mini; conservar HMOD #43.
+          Ver LEEME-Fase2.md para logros, limitaciones y siguiente integración.
+          Licencia fuente mGBA: MPL-2.0; SNES base Ik Core/Snes9x licencia propia.
+          No hay ROMs comerciales ni firmware propietario en este SDK.
+          EOF
+          (cd sdk && zip -q -9 -r ../IkCore-Hibrido-mGBA-SGB-SPC-Fase2-SDK.zip .)
+          unzip -t IkCore-Hibrido-mGBA-SGB-SPC-Fase2-SDK.zip | tail -n 2
+          sha256sum IkCore-Hibrido-mGBA-SGB-SPC-Fase2-SDK.zip
+      - name: Publicar descarga estable del SDK de desarrollo
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          TAG="ikcore-mgba-sgb-spc-phase2-sdk"
+          cat > NOTES.md <<'EOF'
+          # Ik Core híbrido mGBA + audio SGB — Fase 2 (SDK, NO HMOD)
+
+          Compilación ARMhf y pruebas de los componentes del puente de sonido:
+
+          - Motor GB-only de mGBA de fase 1, sin GBA.
+          - Captura LCD SGB de 4096 bytes con formato de bitplanes idéntico
+            al transfer PAL/CHR y espera seis fotogramas.
+          - Cola segura SOUND/SOU_TRN y adaptador C++ a las firmas del
+            SPC700/DSP de la versión #43.
+          - Pruebas sintéticas de integridad y orden aprobadas.
+          - Compatible con GLIBC 2.23 a nivel de objetos binarios ARMv7.
+
+          **No instala ni ejecuta un emulador SGB híbrido.** El adaptador aún
+          no está enlazado al núcleo Snes9x de producción. No hay pruebas
+          de FPS ni fidelidad audio SNES en NES Mini. La #43 sigue intacta.
+
+          Código fuente, scripts de parches y licencia MPL-2.0 se incluyen
+          en el ZIP o están en la rama integracion/mgba-sgb-audio-fase2.
+          No se distribuyen ROMs, BIOS ni firmware propietarios.
+          EOF
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" IkCore-Hibrido-mGBA-SGB-SPC-Fase2-SDK.zip \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" IkCore-Hibrido-mGBA-SGB-SPC-Fase2-SDK.zip \
+              --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Ik Core mGBA SGB SPC - Fase 2 (SDK tecnico, NO HMOD)" \
+              --notes-file NOTES.md --prerelease
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets
