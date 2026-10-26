@@ -23,6 +23,9 @@ jobs:
           gh run download 40272318841 --repo "$GITHUB_REPOSITORY" \
             --name IKCORE-MGBA-SNES9X-PHASE4-ARMHF-COMBINED-NOT-HMOD \
             --dir sdk
+          # upload-artifact flattens dist/* at the artifact root;
+          # normalize only path syntax, NEVER alter the checksum digest.
+          sed -i 's#  dist/#  #' sdk/COMBINED-SHA256.txt
           (cd sdk && sha256sum -c COMBINED-SHA256.txt)
           test -s sdk/ikcore_mgba_snes9x_combined_phase4_armhf.so
           grep -q 'Machine:.*ARM' sdk/ARMHF-ELF.txt
