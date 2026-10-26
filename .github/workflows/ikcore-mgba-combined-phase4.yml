@@ -1,0 +1,234 @@
+name: Ik Core fase4 — enlazar mGBA y Snes9x real ARMv7 (NO HMOD)
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - integracion/mgba-snes9x-enlace-fase4
+    paths:
+      - ".github/workflows/ikcore-mgba-combined-phase4.yml"
+      - "tools/patch_ikcore_mgba_combined_phase4.py"
+      - "native_mgba/ikcore_mgba_combined_phase4.cpp"
+      - "native_mgba/ikcore_mgba_gb_host.*"
+      - "native_mgba/ikcore_sgb_audio_fifo.*"
+      - "native_mgba/ikcore_sgb_packet_bus.*"
+      - "native_mgba/ikcore_sou_trn_capture.*"
+      - "native_mgba/ikcore_spc_sink.cpp"
+permissions:
+  contents: read
+jobs:
+  combined-armv7:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Ik Core
+        uses: actions/checkout@v4
+        with:
+          path: ikcore-project
+      - name: Checkout pinned original SuperSnes9x
+        uses: actions/checkout@v4
+        with:
+          repository: shanytc/snes9x
+          ref: 183e03e5efed3b6d450385c98e2ccffb194153c3
+          path: supersnes9x
+      - name: Checkout pinned original mGBA
+        uses: actions/checkout@v4
+        with:
+          repository: mgba-emu/mgba
+          ref: 1509d86028c7df2d844b590723a80b2978f49e7c
+          path: mgba
+      - name: Checkout NES Mini ARMhf Linaro toolchain
+        uses: actions/checkout@v4
+        with:
+          repository: MayuriLabs/linaro_arm-linux-gnueabihf-7.5
+          ref: master
+          path: toolchain
+      - name: Prepare Xenial 2.23 target ABI
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y file dpkg-dev bc cmake
+          mkdir -p xenial-debs xenial-sysroot wrappers
+          docker run --rm -v "$GITHUB_WORKSPACE/xenial-debs:/out" ubuntu:16.04 bash -ec '
+            printf "%s\n" \
+              "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial main universe" \
+              "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial-updates main universe" \
+              "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial-security main universe" \
+              > /etc/apt/sources.list
+            apt-get update
+            cd /out
+            apt-get download libc6:armhf libc6-dev:armhf linux-libc-dev:armhf \
+               libstdc++6:armhf libgcc1:armhf
+          '
+          for pkg in xenial-debs/*.deb; do dpkg-deb -x "$pkg" xenial-sysroot; done
+          test -e xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6
+          test -e xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6
+          test -e xenial-sysroot/usr/include/stdio.h
+          cat > wrappers/arm-linux-gnueabihf-gcc <<'EOF'
+          #!/bin/sh
+          exec "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc" \
+            --sysroot="$GITHUB_WORKSPACE/xenial-sysroot" "$@"
+          EOF
+          cat > wrappers/arm-linux-gnueabihf-g++ <<'EOF'
+          #!/bin/sh
+          exec "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-g++" \
+            --sysroot="$GITHUB_WORKSPACE/xenial-sysroot" -std=gnu++17 "$@"
+          EOF
+          chmod +x wrappers/*
+          cat > armhf-toolchain.cmake <<EOF
+          set(CMAKE_SYSTEM_NAME Linux)
+          set(CMAKE_SYSTEM_PROCESSOR arm)
+          set(CMAKE_CXX_COMPILER_WORKS TRUE CACHE BOOL "C++ cross compiler trusted" FORCE)
+          set(CMAKE_CXX_ABI_COMPILED TRUE CACHE BOOL "C++ ABI cross compiler trusted" FORCE)
+          set(CMAKE_C_COMPILER "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc")
+          set(CMAKE_CXX_COMPILER "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-g++")
+          set(CMAKE_SYSROOT "$GITHUB_WORKSPACE/xenial-sysroot")
+          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+          EOF
+      - name: Apply original stable Ik Core #43 patches then Fase4 combined binding
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 ikcore-project/tools/apply_sgbpack.py
+          python3 ikcore-project/tools/fix_sgb_lcd_palette_transfers.py
+          python3 ikcore-project/tools/optimize_sgb_compositor.py
+          python3 ikcore-project/tools/patch_ikcore_mgba_combined_phase4.py "$GITHUB_WORKSPACE"
+          cd supersnes9x
+          git diff --check
+          grep -q 'IKCORE_MGBA_COMBINED_PHASE4' libretro/Makefile
+          grep -q 'IKCORE PHASE4 COMBINED LINK OK' libretro/libretro.cpp
+          grep -q 'IKCORE_SGB_PERF_AUDIO_RATE_LOCK' sgb/sgb.cpp
+      - name: Build pinned mGBA GB-only engine for same ARMhf ABI
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 ikcore-project/tools/patch_mgba_sgb_bridge.py mgba
+          python3 ikcore-project/tools/patch_mgba_sou_trn_capture.py mgba
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("mgba/CMakeLists.txt")
+          text=p.read_text()
+          assert text.count("set(M_LIBRARY m)")==1
+          dynamic=str((Path.cwd()/"xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6").resolve())
+          assert Path(dynamic).is_file()
+          p.write_text(text.replace("set(M_LIBRARY m)",'set(M_LIBRARY "'+dynamic+'")'))
+          PY
+          cmake -S mgba -B build-gb-only \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/armhf-toolchain.cmake" \
+            -DCMAKE_C_FLAGS="-O3 -fPIC -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard" \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DCMAKE_BUILD_TYPE=Release -DM_CORE_GB=ON -DM_CORE_GBA=OFF \
+            -DLIBMGBA_ONLY=ON -DBUILD_LIBRETRO=OFF -DBUILD_STATIC=ON \
+            -DBUILD_SHARED=OFF -DBUILD_LTO=OFF
+          cmake --build build-gb-only --target mgba --parallel 3
+          test -s build-gb-only/libmgba.a
+          "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar" t \
+            build-gb-only/libmgba.a | grep -Fxq gb.c.o
+          if "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar" t \
+            build-gb-only/libmgba.a | grep -Fxq gba.c.o; then
+            echo "Unexpected GBA engine in Ik Core ARM build" >&2
+            exit 1
+          fi
+      - name: Build mGBA phase3 host + SGB SOUND/SOU_TRN/SPC bridge into ARMhf archive
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p combined-objects
+          CC="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc"
+          CXX="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++"
+          AR="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar"
+          MGBA_DEFINES="$(sed -n 's/^C_DEFINES = //p' build-gb-only/CMakeFiles/mgba.dir/flags.make)"
+          test -n "$MGBA_DEFINES"
+          echo "MGBA_SHARED_STRUCT_ABI $MGBA_DEFINES"
+          "$CC" $MGBA_DEFINES -O3 -fPIC -std=c11 \
+            -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard \
+            -I mgba/include -I build-gb-only/include \
+            -c ikcore-project/native_mgba/ikcore_mgba_gb_host.c \
+            -o combined-objects/ikcore_mgba_gb_host.o
+          for f in ikcore_sgb_packet_bus ikcore_sou_trn_capture ikcore_sgb_audio_fifo; do
+            "$CC" -O3 -std=c11 -fPIC -Wall -Wextra \
+              -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard \
+              -c "ikcore-project/native_mgba/$f.c" -o "combined-objects/$f.o"
+          done
+          "$CXX" -O3 -fPIC -fno-exceptions -fno-rtti \
+            -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard \
+            -c ikcore-project/native_mgba/ikcore_spc_sink.cpp \
+            -o combined-objects/ikcore_spc_sink.o
+          "$AR" rcs libikcore_mgba_combined_bridge_armhf.a combined-objects/*.o
+          "$AR" t libikcore_mgba_combined_bridge_armhf.a \
+            > combined-bridge-objects.txt
+          grep -q 'ikcore_mgba_gb_host.o' combined-bridge-objects.txt
+          grep -q 'ikcore_spc_sink.o' combined-bridge-objects.txt
+      - name: LINK same Snes9x native core with mGBA GB-only and real SPC700/DSP
+        working-directory: supersnes9x/libretro
+        shell: bash
+        run: |
+          set -euxo pipefail
+          CC="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc"
+          CXX="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++"
+          make clean || true
+          make -j2 \
+            platform=classic_armv7_a7 \
+            CC="$CC" \
+            CXX="$CXX -fno-threadsafe-statics -fno-semantic-interposition -pthread" \
+            AR="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar" \
+            STRIP="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-strip" \
+            HAVE_UNZIP=0 \
+            CPPFLAGS="-DSGBPACK_LITE -DIKCORE_GB_FAST_IDLE -DIKCORE_PPU_IDLE_FAST -DIKCORE_MBC5_FAST -DIKCORE_FIXED_ACID_KNOBS -DIKCORE_SGB_PERF_PPU -DIKCORE_SGB_HYBRID_AUDIO -DIKCORE_SGB_COMPOSITOR_FAST -DIKCORE_SGB_LAZY_APU -DIKCORE_SGB_PERF_AUDIO_THREADED -DIKCORE_SGB_PERF_AUDIO_RATE_LOCK -DIKCORE_MGBA_COMBINED_LINK" \
+            LDFLAGS="-flto=4 -pthread -static-libgcc -static-libstdc++" \
+            LIBS="$GITHUB_WORKSPACE/libikcore_mgba_combined_bridge_armhf.a $GITHUB_WORKSPACE/build-gb-only/libmgba.a $GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6 -pthread"
+      - name: Inspect combined ELF ABI and actual symbols; forbid missing SGB/SPC/mGBA functions
+        shell: bash
+        run: |
+          set -euxo pipefail
+          CORE=supersnes9x/libretro/supersnes9x_libretro.so
+          test -s "$CORE"
+          mkdir -p dist
+          READELF="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf"
+          NM="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-nm"
+          "$READELF" -h "$CORE" | tee dist/ARMHF-ELF.txt
+          "$READELF" -V "$CORE" | tee dist/ARMHF-GLIBC.txt
+          "$NM" -C "$CORE" > dist/COMBINED-SYMBOLS.txt
+          grep -q 'Machine:.*ARM' dist/ARMHF-ELF.txt
+          grep -q 'hard-float ABI' dist/ARMHF-ELF.txt
+          if grep -Eq 'GLIBC_2\.(2[4-9]|[3-9][0-9])' dist/ARMHF-GLIBC.txt; then
+            echo 'FAIL: GLIBC newer than NES Mini 2.23' >&2
+            exit 1
+          fi
+          for key in \
+            ikcore_mgba_phase4_link_probe ikcore_mgba_phase4_run_one_frame \
+            ikcore_mgba_run ikcore_mgba_open ikcore_sgb_spc_dispatch_frame \
+            S9xSGBPerfSoundCommand S9xSGBPerfSouTrn mCoreFindVF; do
+            if ! grep -q "$key" dist/COMBINED-SYMBOLS.txt; then
+              echo "FAIL: missing combined symbol $key" >&2
+              exit 1
+            fi
+          done
+          "$NM" -u "$CORE" | tee dist/COMBINED-UNDEFINED.txt
+          if grep -E ' (mCoreFindVF|ikcore_mgba_run|ikcore_sgb_spc_dispatch_frame|S9xSGBPerfSouTrn|S9xSGBPerfSoundCommand)$' \
+              dist/COMBINED-UNDEFINED.txt; then
+            echo "FAIL: internal GB/SGB/SPC reference remains unresolved" >&2
+            exit 1
+          fi
+          cp "$CORE" dist/ikcore_mgba_snes9x_combined_phase4_armhf.so
+          "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-strip" \
+            --strip-unneeded dist/ikcore_mgba_snes9x_combined_phase4_armhf.so
+          sha256sum dist/ikcore_mgba_snes9x_combined_phase4_armhf.so \
+             > dist/COMBINED-SHA256.txt
+          cat > dist/NO-INSTALAR-COMO-HMOD.txt <<'EOF'
+          IK CORE FASE 4: UN SOLO BINARIO ARMv7 CON SNES9X Y MGBA
+          =====================================================
+          No es HMOD. El núcleo GB mGBA se enlazó al mismo binario
+          con la CPU/APU SNES y su SPC700/DSP original.
+          El núcleo GB mGBA arranca exclusivamente mediante una API
+          opt-in aún no activada por el ciclo principal SGB.
+          No se ha demostrado mezcla de audio real, arranque híbrido
+          ni 60 FPS en NES Mini. No instalar en Hakchi.
+          La #43, base validada, no ha cambiado.
+          EOF
+      - name: Archive proof-of-link for development only (NO HMOD)
+        uses: actions/upload-artifact@v4
+        with:
+          name: IKCORE-MGBA-SNES9X-PHASE4-ARMHF-COMBINED-NOT-HMOD
+          path: dist/
