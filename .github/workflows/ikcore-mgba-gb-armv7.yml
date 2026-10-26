@@ -181,7 +181,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release -DM_CORE_GB=ON -DM_CORE_GBA=OFF \
             -DLIBMGBA_ONLY=ON -DBUILD_LIBRETRO=OFF \
             -DBUILD_STATIC=ON -DBUILD_SHARED=OFF -DBUILD_LTO=OFF
-          cmake --build build-gb-only --target mgba-static --parallel 3
+          cmake --build build-gb-only --target mgba --parallel 3
           archive="$(find build-gb-only -type f -name '*.a' | head -n1)"
           test -n "$archive" && test -s "$archive"
           cp "$archive" ikcore_mgba_gb_only_armhf_phase1.a
