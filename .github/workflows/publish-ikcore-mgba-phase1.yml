@@ -1,0 +1,78 @@
+name: Publicar SDK interno Ik Core mGBA fase 1 (NO HMOD)
+on:
+  push:
+    branches:
+      - integracion/mgba-gb-core-armv7-fase1
+    paths:
+      - ".github/workflows/publish-ikcore-mgba-phase1.yml"
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Recuperar resultados verificados de ambos compiladores
+        env:
+          GH_TOKEN: \${{ github.token }}
+        run: |
+          set -euxo pipefail
+          mkdir -p sdk
+          gh run download 40264893185 \
+             --repo "$GITHUB_REPOSITORY" \
+             --name IKCORE-MGBA-GB-PHASE1-ARMHF --dir sdk
+          gh run download 40264893185 \
+             --repo "$GITHUB_REPOSITORY" \
+             --name IKCORE-MGBA-GB-PHASE1-HOST --dir sdk
+          test -s sdk/ikcore_mgba_gb_armhf_phase1.so
+          test -s sdk/ikcore_mgba_gb_only_armhf_phase1.a
+          (cd sdk && sha256sum -c IKCORE-MGBA-ARMHF-SHA256.txt)
+          cp docs/FASE1_MGBA_GB_ARM.md sdk/LEEME-Fase1.md
+          curl -fLsS \
+            'https://raw.githubusercontent.com/mgba-emu/mgba/1509d86028c7df2d844b590723a80b2978f49e7c/LICENSE' \
+            -o sdk/LICENSE-mGBA-MPL-2.0.txt
+          cat > sdk/NO-INSTALAR-COMO-HMOD.txt <<'EOF'
+          SDK DE DESARROLLO: IK CORE HIBRIDO + mGBA GB FASE 1
+          =================================================
+          ESTO NO ES UN HMOD Y NO CONTIENE UN EMULADOR HIBRIDO COMPLETO.
+          NO INSTALAR ESTOS ARCHIVOS EN HAKCHI COMO HMOD.
+          SPC700/DSP SGB TODAVIA NO ESTA CONECTADO A mGBA.
+          Ik Core #43 NO HA SIDO MODIFICADO.
+          Criterios completos y origen de fuentes: LEEME-Fase1.md.
+          EOF
+          (cd sdk && zip -9 -q -r ../IkCore-Hibrido-mGBA-GB-ARMhf-Fase1-SDK.zip .)
+          ls -lh sdk/*.a sdk/*.so IkCore-Hibrido-mGBA-GB-ARMhf-Fase1-SDK.zip
+
+      - name: Publicar enlace persistente en GitHub Releases
+        env:
+          GH_TOKEN: \${{ github.token }}
+        run: |
+          set -euxo pipefail
+          TAG="ikcore-mgba-gb-armhf-phase1-sdk"
+          cat > NOTES.md <<'EOF'
+          Fase 1 validada del trabajo hacia Ik Core híbrido mGBA + sonido SPC/DSP.
+          
+          - Núcleo mGBA ejecutó 240 fotogramas y produjo audio GB en una ROM sintética,
+            **solamente en x86 de GitHub Actions**.
+          - Núcleo mGBA ARMhf compilado con GLIBC <= 2.23 para NES Mini.
+          - Biblioteca ARMhf estática GB-only sin GBA ni frontend libretro compilada.
+          - Hook de comandos SGB completos y FIFO SOUND/SOU_TRN probaron orden.
+          
+          **NO ES HMOD. NO ESTA CONECTADO EL AUDIO SNES. NO USAR EN HAKCHI.**
+          No afirmar 60 FPS en NES Mini. La base #43 permanece intacta.
+          
+          Véase LEEME-Fase1.md dentro del SDK y el código de la rama.
+          mGBA MPL-2.0; no se incluyen ROMs ni firmware.
+          EOF
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" IkCore-Hibrido-mGBA-GB-ARMhf-Fase1-SDK.zip \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" IkCore-Hibrido-mGBA-GB-ARMhf-Fase1-SDK.zip \
+              --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Ik Core hibrido - Motor GB mGBA ARMhf Fase 1 (SDK; NO HMOD)" \
+              --notes-file NOTES.md --prerelease
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets
