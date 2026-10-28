@@ -5,6 +5,9 @@
 #ifndef IKCORE_SOU_TRN_CAPTURE_H
 #define IKCORE_SOU_TRN_CAPTURE_H
 #include <stdbool.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include <stdint.h>
 enum { IKCORE_SOU_BYTES=4096, IKCORE_SOU_PIXELS=160, IKCORE_SOU_SKIP_FRAMES=6 };
 typedef struct {
@@ -31,4 +34,7 @@ void ikcore_sgb_transfer_frame_hook(void);
 void ikcore_sgb_transfer_reset_hook(void);
 /* Strong host implementation (in Ik Core) can use this weak callback. */
 void ikcore_sgb_transfer_completed_hook(const uint8_t *payload,unsigned size);
+#ifdef __cplusplus
+}
+#endif
 #endif
