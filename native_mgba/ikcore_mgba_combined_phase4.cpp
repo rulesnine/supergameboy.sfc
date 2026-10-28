@@ -85,6 +85,28 @@ extern "C" __attribute__((used, externally_visible, noinline)) int ikcore_mgba_p
     return 1;
 }
 
+/* Fase5: initial GB-side boot is owned by mGBA from PC=0000, not
+ * transplanted from an already-running Game Boy CPU. Unlike the phase4
+ * fast entry, this keeps the boot handshake program instead of skipping it.
+ * This API does not *yet* connect SNES BIOS ICD2 reads/writes; no automatic
+ * enabling in regular Clover/Hakchi runtime until synchronization exists.
+ */
+extern "C" __attribute__((used, externally_visible, noinline))
+int ikcore_mgba_phase5_prepare_boot(const uint8_t *rom,size_t rom_bytes,
+                                   const uint8_t *sgb_gb_boot,size_t boot_bytes)
+{
+    if(ikcore_combined_gb || !rom || !sgb_gb_boot || boot_bytes!=256)return 0;
+    ikcore_sgb_audio_reset();
+    ikcore_combined_gb=ikcore_mgba_open_sgb_boot(
+        rom,rom_bytes,sgb_gb_boot,boot_bytes);
+    if(!ikcore_combined_gb)return 0;
+    return ikcore_mgba_boot_mapped(ikcore_combined_gb) ? 1:0;
+}
+extern "C" __attribute__((used, externally_visible, noinline))
+unsigned ikcore_mgba_phase5_boot_pc(void)
+{
+    return ikcore_mgba_program_counter(ikcore_combined_gb);
+}
 extern "C" __attribute__((used, externally_visible, noinline)) const ikcore_mgba_frame *ikcore_mgba_phase4_latest_frame(void)
 {
     return ikcore_combined_gb ? &ikcore_combined_frame : nullptr;
