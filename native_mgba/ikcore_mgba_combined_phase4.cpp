@@ -132,7 +132,7 @@ extern "C" __attribute__((used,externally_visible,noinline)) int ikcore_mgba_pha
        !S9xSGBBIOSGBIsReleased())return -1;
     return S9xSGBReceiveMGBAPackets(p,n);
 }
-extern "C" int ikcore_mgba_phase6_icd2_active(void)
+extern "C" __attribute__((used,externally_visible,noinline)) int ikcore_mgba_phase6_icd2_active(void)
 {
     return ikcore_phase6_icd2_enabled?1:0;
 }
