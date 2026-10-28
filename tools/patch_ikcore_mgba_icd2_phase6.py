@@ -64,4 +64,13 @@ s=once(s,facade,'''int S9xSGBReceiveMGBAPackets(const unsigned char *packets,uns
 
 '''+facade,"ICD2 C facade")
 hh.write_text(h,encoding="utf-8");cc.write_text(s,encoding="utf-8")
+# Fase4/5 version-script is passed with --version-script and -fwhole-program.
+# Export these two user-visible opt-in symbols or they disappear under LTO.
+version=root/"libretro/link.T"
+vs=version.read_text(encoding="utf-8")
+head="ikcore_mgba_phase5_*;"
+if vs.count(head)!=1:
+    raise RuntimeError("Phase5 linker exports changed")
+vs=vs.replace(head,"ikcore_mgba_phase5_*; ikcore_mgba_phase6_*;",1)
+version.write_text(vs,encoding="utf-8")
 print("IKCORE_PHASE6_ICD2_REAL_FIFO connected mGBA completed packets to Snes9x BIOS $6002/$7000")
