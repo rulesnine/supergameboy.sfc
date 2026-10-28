@@ -25,6 +25,8 @@
 struct ikcore_mgba_host {
     struct mCore *core;
     unsigned char *rom_data;
+    unsigned char *boot_data;
+    unsigned boot_mapped;
     size_t rom_bytes;
     mColor *video;
     unsigned frame_index;
@@ -35,7 +37,10 @@ static double ik_time_ms(void) {
     clock_gettime(CLOCK_MONOTONIC, &t);
     return (double)t.tv_sec*1000.0+(double)t.tv_nsec*0.000001;
 }
-ikcore_mgba_host *ikcore_mgba_open(const void *gb_rom,size_t rom_bytes,int sgb_mode) {
+static ikcore_mgba_host *ikcore_mgba_open_impl(const void *gb_rom,size_t rom_bytes,
+     int sgb_mode,const void *boot,size_t boot_bytes) {
+    if(boot && (!sgb_mode || boot_bytes!=256))return NULL;
+    if(!boot && boot_bytes)return NULL;
     if(!gb_rom || rom_bytes<0x150 || rom_bytes>8u*1024u*1024u)return NULL;
     ikcore_mgba_host *h=calloc(1,sizeof(*h));
     if(!h)return NULL;
@@ -92,16 +97,50 @@ ikcore_mgba_host *ikcore_mgba_open(const void *gb_rom,size_t rom_bytes,int sgb_m
         gb->model=GB_MODEL_DMG;
         mCoreConfigSetDefaultValue(&h->core->config,"gb.model","DMG");
     }
+    if(boot) {
+        /* GB-side SGB boot starts at PC=0000. This is NOT the SNES
+         * Super Game Boy firmware (which is loaded by Snes9x separately).
+         * Pin caller-supplied, licensed boot ROM bytes in owned storage. */
+        h->boot_data=malloc(256);
+        if(!h->boot_data) {ikcore_mgba_close(h);return NULL;}
+        memcpy(h->boot_data,boot,256);
+        struct VFile *bvf=VFileFromMemory(h->boot_data,256);
+        if(!bvf) {ikcore_mgba_close(h);return NULL;}
+        h->core->opts.useBios=true;
+        h->core->opts.skipBios=false;
+        if(!h->core->loadBIOS(h->core,bvf,0)) {
+            bvf->close(bvf);
+            ikcore_mgba_close(h);
+            return NULL;
+        }
+    }
     IKHOST_TRACE("before GB CPU reset");
     h->core->reset(h->core);
     IKHOST_TRACE("after GB CPU reset");
     h->model=(unsigned)gb->model;
+    h->boot_mapped=(boot && gb->biosVf && gb->cpu->pc==0) ? 1u:0u;
+    if(boot && !h->boot_mapped) {ikcore_mgba_close(h);return NULL;}
     /* A reliable SGB session MUST run mGBA as SGB. Otherwise silently
        launching in DMG would drop all SGB SOUND/PAL/CHR/PCT packets. */
     if(sgb_mode && !(h->model & GB_MODEL_SGB)){
         ikcore_mgba_close(h);return NULL;
     }
     return h;
+}
+ikcore_mgba_host *ikcore_mgba_open(const void *rom,size_t bytes,int sgb) {
+    return ikcore_mgba_open_impl(rom,bytes,sgb,NULL,0);
+}
+ikcore_mgba_host *ikcore_mgba_open_sgb_boot(const void *rom,size_t bytes,
+                                             const void *boot,size_t size) {
+    if(!boot||size!=256)return NULL;
+    return ikcore_mgba_open_impl(rom,bytes,1,boot,size);
+}
+unsigned ikcore_mgba_program_counter(const ikcore_mgba_host *h) {
+    if(!h||!h->core||!h->core->cpu)return 0xFFFFu;
+    return ((const struct SM83Core*)h->core->cpu)->pc;
+}
+int ikcore_mgba_boot_mapped(const ikcore_mgba_host *h) {
+    return h && h->boot_mapped ? 1:0;
 }
 int ikcore_mgba_run(ikcore_mgba_host *host,uint8_t gb_keys,ikcore_mgba_frame *out) {
     if(!host || !host->core || !out)return 0;
@@ -154,6 +193,7 @@ void ikcore_mgba_close(ikcore_mgba_host *host) {
         IKHOST_TRACE("after mCore deinit");
     }
     free(host->rom_data);
+    free(host->boot_data);
     free(host->video);
     free(host);
 }
