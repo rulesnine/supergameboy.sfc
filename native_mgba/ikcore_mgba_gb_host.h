@@ -35,6 +35,13 @@ typedef struct {
   double gb_frame_ms;
 } ikcore_mgba_frame;
 ikcore_mgba_host *ikcore_mgba_open(const void *gb_rom,size_t rom_bytes,int sgb_mode);
+/* SGB1 boot code must run BEFORE the cartridge, never be injected after
+ * CPU state advanced. Supplied boot code is owned by caller; copied here.
+ * Only supported as 256-byte GB-side SGB boot ROM (not the SNES .sfc). */
+ikcore_mgba_host *ikcore_mgba_open_sgb_boot(const void *gb_rom,size_t rom_bytes,
+                                             const void *boot_256,size_t boot_bytes);
+unsigned ikcore_mgba_program_counter(const ikcore_mgba_host *host);
+int ikcore_mgba_boot_mapped(const ikcore_mgba_host *host);
 int ikcore_mgba_run(ikcore_mgba_host *host,uint8_t gb_keys,ikcore_mgba_frame *out);
 size_t ikcore_mgba_clone_sram(ikcore_mgba_host *host,void **out_allocated);
 int ikcore_mgba_restore_sram(ikcore_mgba_host *host,const void *data,size_t bytes);
