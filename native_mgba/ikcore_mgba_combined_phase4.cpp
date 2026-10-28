@@ -11,6 +11,8 @@
  */
 #include "ikcore_mgba_gb_host.h"
 #include "ikcore_sgb_audio_fifo.h"
+#include "ikcore_sgb_packet_bus.h"
+#include "ikcore_sou_trn_capture.h"
 #include "../apu/apu.h"
 #include "../snes9x.h"
 #include "../sgb/sgb.h"
@@ -47,7 +49,14 @@ extern "C" __attribute__((used, externally_visible, noinline)) int ikcore_mgba_p
      * demonstrates real co-residence of the GB engine and Snes9x APU. */
     const int model=(int)ikcore_mgba_model(nullptr);
     const unsigned count=ikcore_sgb_audio_count();
-    return model == 255 && count <= IKCORE_SGB_AUDIO_CAPACITY ? 0 : -1;
+    // These STRONG calls are mandatory. mGBA and Ik Core were previously
+    // linked from static archives where only weak references to the packet
+    // and LCD hooks existed, allowing the linker to omit the actual bridge.
+    // Pull both objects into the same ELF before any Game Boy CPU starts.
+    const unsigned packets=ikcore_sgb_bus_count();
+    const unsigned capturing=ikcore_sgb_transfer_capture_active();
+    return model==255 && count<=IKCORE_SGB_AUDIO_CAPACITY &&
+           packets<=IKCORE_SGB_PACKET_DEPTH && capturing<=1u ? 0:-1;
 }
 
 extern "C" __attribute__((used, externally_visible, noinline)) void ikcore_mgba_phase4_stop(void)
