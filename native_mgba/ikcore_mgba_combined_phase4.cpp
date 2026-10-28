@@ -125,7 +125,7 @@ unsigned ikcore_mgba_phase5_boot_pc(void)
  * >0=packet accepted by real ICD2, <0=refused: no direct audio fallback.
  * This function is called only after a complete mGBA SGB command.
  */
-extern "C" int ikcore_mgba_phase6_route_icd2_packet(const uint8_t *p,unsigned n)
+extern "C" __attribute__((used,externally_visible,noinline)) int ikcore_mgba_phase6_route_icd2_packet(const uint8_t *p,unsigned n)
 {
     if(!ikcore_phase6_icd2_enabled) return 0;
     if(!Settings.SGB_BIOSModeActive || !ikcore_combined_gb || !p ||
