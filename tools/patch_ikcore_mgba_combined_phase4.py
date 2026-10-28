@@ -22,7 +22,8 @@ project = Path(__file__).resolve().parent.parent
 if not (core / "Makefile").exists() or not (core / "libretro.cpp").exists():
     raise SystemExit("Expected supersnes9x/libretro working tree at " + str(root))
 
-for name in ["ikcore_mgba_gb_host.h", "ikcore_sgb_audio_fifo.h"]:
+for name in ["ikcore_mgba_gb_host.h", "ikcore_sgb_audio_fifo.h",
+             "ikcore_sgb_packet_bus.h", "ikcore_sou_trn_capture.h"]:
     shutil.copyfile(project / "native_mgba" / name, core / name)
 shutil.copyfile(project / "native_mgba" / "ikcore_mgba_combined_phase4.cpp",
                 core / "ikcore_mgba_combined_phase4.cpp")
