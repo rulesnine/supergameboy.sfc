@@ -6,6 +6,9 @@
 #define IKCORE_SGB_PACKET_BUS_H
 #include <stdint.h>
 #include <stdbool.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
 #define IKCORE_SGB_PACKET_BYTES 112
 #define IKCORE_SGB_PACKET_DEPTH 128
 #define IKCORE_SGB_SOUND_CMD 8
@@ -21,4 +24,7 @@ unsigned ikcore_sgb_bus_count(void);
 unsigned ikcore_sgb_bus_dropped(void);
 bool ikcore_sgb_bus_pop(ikcore_sgb_packet *out);
 void ikcore_sgb_packet_hook(unsigned command,const unsigned char *data,unsigned bytes);
+#ifdef __cplusplus
+}
+#endif
 #endif
