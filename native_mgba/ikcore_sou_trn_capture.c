@@ -77,6 +77,8 @@ extern void ikcore_sgb_bus_reset(void) __attribute__((weak));
 extern void ikcore_sgb_audio_reset(void) __attribute__((weak));
 #endif
 static ikcore_sou_capture singleton;
+unsigned ikcore_sgb_transfer_capture_active(void) {return singleton.pending ? 1u : 0u;}
+
 static void ikcore_sou_emit(const uint8_t *payload,unsigned size,void *ctx) {
     (void)ctx;
 #if defined(__GNUC__)
