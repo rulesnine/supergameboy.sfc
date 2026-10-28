@@ -12,6 +12,8 @@
 #include "ikcore_mgba_gb_host.h"
 #include "ikcore_sgb_audio_fifo.h"
 #include "../apu/apu.h"
+#include "../snes9x.h"
+#include "../sgb/sgb.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -21,6 +23,7 @@ extern "C" unsigned ikcore_sgb_spc_dispatch_frame(void);
  * from the existing Snes9x SGB singleton to avoid corrupting #43 state. */
 static ikcore_mgba_host *ikcore_combined_gb = nullptr;
 static ikcore_mgba_frame ikcore_combined_frame = {};
+static bool ikcore_phase6_icd2_enabled=false;
 
 /* Historical bit mapping from the validated SuperSnes9x SetJoypad() path.
  * Bit masks match the NES Mini's existing Clovercon->SNES pad mapping. */
@@ -53,6 +56,7 @@ extern "C" __attribute__((used, externally_visible, noinline)) void ikcore_mgba_
         ikcore_mgba_close(ikcore_combined_gb);
         ikcore_combined_gb=nullptr;
     }
+    ikcore_phase6_icd2_enabled=false;
     ikcore_sgb_audio_reset();
     memset(&ikcore_combined_frame,0,sizeof(ikcore_combined_frame));
 }
@@ -107,6 +111,38 @@ unsigned ikcore_mgba_phase5_boot_pc(void)
 {
     return ikcore_mgba_program_counter(ikcore_combined_gb);
 }
+/* Phase6: packet bridge with exact original Snes9x ICD2 BIOS register
+ * ownership, NEVER a second copy of ICD2 in mGBA. 0=normal legacy path,
+ * >0=packet accepted by real ICD2, <0=refused: no direct audio fallback.
+ * This function is called only after a complete mGBA SGB command.
+ */
+extern "C" int ikcore_mgba_phase6_route_icd2_packet(const uint8_t *p,unsigned n)
+{
+    if(!ikcore_phase6_icd2_enabled) return 0;
+    if(!Settings.SGB_BIOSModeActive || !ikcore_combined_gb || !p ||
+       !S9xSGBBIOSGBIsReleased())return -1;
+    return S9xSGBReceiveMGBAPackets(p,n);
+}
+extern "C" int ikcore_mgba_phase6_icd2_active(void)
+{
+    return ikcore_phase6_icd2_enabled?1:0;
+}
+/* Opt-in ONLY: caller must have loaded the actual SNES SGB BIOS and
+ * the GB-side boot in mGBA BEFORE running either CPU. Regular #43 and
+ * all Hakchi startup paths do not call this yet. */
+extern "C" __attribute__((used, externally_visible, noinline))
+int ikcore_mgba_phase6_enable_icd2(void)
+{
+    if(!ikcore_combined_gb || !Settings.SGB_BIOSModeActive)return 0;
+    ikcore_phase6_icd2_enabled=true;
+    return 1;
+}
+extern "C" __attribute__((used, externally_visible, noinline))
+void ikcore_mgba_phase6_disable_icd2(void)
+{
+    ikcore_phase6_icd2_enabled=false;
+}
+
 extern "C" __attribute__((used, externally_visible, noinline)) const ikcore_mgba_frame *ikcore_mgba_phase4_latest_frame(void)
 {
     return ikcore_combined_gb ? &ikcore_combined_frame : nullptr;
