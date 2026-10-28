@@ -82,7 +82,7 @@ version=version_script.read_text(encoding="utf-8")
 expected="   global: retro_*;"
 assert version.count(expected)==1
 version=version.replace(expected,
-    "   global: retro_*; ikcore_mgba_phase4_*;",1)
+    "   global: retro_*; ikcore_mgba_phase4_*; ikcore_mgba_phase5_*;",1)
 version_script.write_text(version,encoding="utf-8")
 print("IKCORE_PHASE4 exported optional host bridge ABI via version script")
 print("IKCORE_PHASE4_COMBINED patched Makefile, libretro init/deinit, mGBA symbols")
