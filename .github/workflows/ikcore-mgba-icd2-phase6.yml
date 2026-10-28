@@ -107,7 +107,7 @@ jobs:
           grep -q 'IKCORE_MGBA_COMBINED_PHASE4' libretro/Makefile
           grep -q 'IKCORE PHASE4 COMBINED LINK OK' libretro/libretro.cpp
           grep -q 'IKCORE_SGB_PERF_AUDIO_RATE_LOCK' sgb/sgb.cpp
-      - name: Test producer route invariants: ICD2 command, multipart and no duplicated SPC
+      - name: "Test producer route invariants: ICD2 command, multipart and no duplicated SPC"
         shell: bash
         run: |
           set -euxo pipefail
