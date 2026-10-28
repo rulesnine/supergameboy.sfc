@@ -1,0 +1,125 @@
+name: Publicar SDK Fase6 mGBA -> Snes9x ICD2 (NO HMOD)
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - integracion/mgba-icd2-fase6
+    paths:
+      - ".github/workflows/publish-ikcore-mgba-phase6.yml"
+permissions:
+  actions: read
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Recover successful ARMhf combined Snes9x plus mGBA binary and evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          mkdir -p sdk/source sdk/docs sdk/licencias
+          gh run download 40629530385 --repo "$GITHUB_REPOSITORY" \
+            --name IKCORE-MGBA-SNES9X-PHASE6-ICD2-NOT-HMOD \
+            --dir sdk
+          # upload-artifact flattens dist/* at the artifact root;
+          # normalize only path syntax, NEVER alter the checksum digest.
+          sed -i 's#  dist/#  #' sdk/COMBINED-SHA256.txt
+          (cd sdk && sha256sum -c COMBINED-SHA256.txt)
+          test -s sdk/ikcore_mgba_snes9x_combined_phase4_armhf.so
+          grep -q 'Machine:.*ARM' sdk/ARMHF-ELF.txt
+          grep -q 'hard-float ABI' sdk/ARMHF-ELF.txt
+          grep -q 'ikcore_mgba_phase4_link_probe' sdk/EXPORTED-PHASE4-ABI.txt
+          grep -q 'ikcore_mgba_phase4_run_one_frame' sdk/EXPORTED-PHASE4-ABI.txt
+          grep -q 'ikcore_mgba_phase5_prepare_boot' sdk/EXPORTED-PHASE4-ABI.txt
+          grep -q 'ikcore_mgba_phase5_boot_pc' sdk/EXPORTED-PHASE4-ABI.txt
+          grep -q 'IKCORE_MGBA_SGB_BOOT_OK frames=30 startPC=0000' sdk/IKCORE-SGB-BOOT-TEST.txt
+          grep -q 'IKCORE_PHASE6_ICD2_ROUTER_OK' sdk/IKCORE-PHASE6-ROUTER-TEST.txt
+          grep -q 'ikcore_mgba_phase6_enable_icd2' sdk/EXPORTED-PHASE4-ABI.txt
+          grep -q 'ikcore_mgba_phase6_disable_icd2' sdk/EXPORTED-PHASE4-ABI.txt
+          grep -q 'S9xSGBReceiveMGBAPackets' sdk/COMBINED-SYMBOLS.txt
+          grep -q 'ikcore_mgba_phase6_route_icd2_packet' sdk/COMBINED-SYMBOLS.txt
+          grep -q 'S9xSGBPerfSouTrn' sdk/COMBINED-SYMBOLS.txt
+          grep -q 'mCoreFindVF' sdk/COMBINED-SYMBOLS.txt
+          if grep -Eq 'GLIBC_2\.(2[4-9]|[3-9][0-9])' sdk/ARMHF-GLIBC.txt; then
+            echo 'GLIBC ABI beyond NES Mini' >&2
+            exit 1
+          fi
+          cp docs/FASE6_MGBA_ICD2.md sdk/LEEME-FASE6.md
+          cp docs/FASE5_MGBA_ARRANQUE_SGB.md docs/FASE4_MGBA_SNES9X_ELF.md sdk/docs/
+          cp native_mgba/ikcore_mgba_combined_phase4.cpp sdk/source/
+          cp native_mgba/ikcore_sgb_packet_bus.c native_mgba/ikcore_sgb_packet_bus.h sdk/source/
+          cp native_mgba/ikcore_sgb_audio_fifo.c native_mgba/ikcore_sou_trn_capture.c sdk/source/
+          cp tests/ikcore_phase6_icd2_route_test.c sdk/source/
+          cp native_mgba/ikcore_mgba_gb_host.h sdk/source/
+          cp tools/patch_ikcore_mgba_combined_phase4.py tools/patch_mgba_sameboy_sgb_boot.py tools/patch_ikcore_mgba_icd2_phase6.py sdk/source/
+          cp .github/workflows/ikcore-mgba-icd2-phase6.yml sdk/source/
+          curl -fLsS \
+            'https://raw.githubusercontent.com/mgba-emu/mgba/1509d86028c7df2d844b590723a80b2978f49e7c/LICENSE' \
+            -o sdk/licencias/mGBA-MPL-2.0-LICENSE.txt
+          curl -fLsS \
+            'https://raw.githubusercontent.com/shanytc/snes9x/183e03e5efed3b6d450385c98e2ccffb194153c3/LICENSE' \
+            -o sdk/licencias/Snes9x-LICENSE.txt
+          curl -fLsS \
+            'https://raw.githubusercontent.com/shanytc/snes9x/183e03e5efed3b6d450385c98e2ccffb194153c3/sgb/SAMEBOY-LICENSE.txt' \
+            -o sdk/licencias/SameBoy-Expat-MIT-LICENSE.txt
+          cat > sdk/NO-INSTALAR-COMO-HMOD.txt <<'EOF'
+          SDK FASE4: Snes9x + mGBA SOLO GAME BOY + SPC700/DSP original
+          =============================================================
+          NO ES HMOD PARA HAKCHI. NO INSTALAR ESTOS ARCHIVOS EN NES MINI.
+          Se compiló UNA BIBLIOTECA ARMhf vinculando ambos núcleos y sus
+          símbolos de puente; el motor mGBA sigue DORMIDO en el ciclo
+          principal. Se conserva el boot/render/SPC de la versión #43.
+          Sin sustitución operativa de la CPU GB durante el arranque.
+          Sin audio SNES verificado sobre el motor mGBA.
+          Sin rendimiento comprobado en NES Mini, ni 60 FPS demostrados.
+          Mantener #43 sin modificar; detalles LEEME-FASE4.md.
+          Las ROM y BIOS comerciales NO forman parte del SDK.
+          EOF
+          (cd sdk && zip -q -9 -r ../IkCore-Hibrido-Snes9x-mGBA-Fase6-SDK.zip .)
+          unzip -t IkCore-Hibrido-Snes9x-mGBA-Fase6-SDK.zip | tail -n 2
+          sha256sum IkCore-Hibrido-Snes9x-mGBA-Fase6-SDK.zip \
+            > IkCore-Hibrido-Snes9x-mGBA-Fase6-SDK.zip.sha256
+      - name: Publish verified SDK only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          TAG="ikcore-mgba-icd2-phase6-sdk"
+          cat > NOTES.md <<'EOF'
+          # Ik Core — Fase 6: puente de paquetes mGBA al ICD2 original Snes9x
+          **SDK técnico; no es una HMOD y no está listo para instalar.**
+
+          Un mismo ELF ARMhf/hard-float incluye el core SNES/SPC700/DSP de
+          Ik Core y el motor GB-only de mGBA (sin núcleo GBA). El enlace de
+          símbolos y ABI GLIBC <=2.23 pasaron por CI, con funciones de
+          comunicación opcionales exportadas.
+
+          **CI x86 confirmó arranque SGB1 desde PC=0000 y el puente de
+          comandos SOUND/multiparte sin duplicar SPC (receptor simulado).**
+          **La misma biblioteca ARMhf enlaza mGBA y el receptor ICD2 real
+          de Snes9x, pero todavía no se ha probado el handshake en BIOS SNES.**
+          **El emulador híbrido NO ejecuta todavía un juego en la NES Mini.**
+          El código GB mGBA aún no reemplaza la CPU Game Boy en el arranque de Hakchi;
+          el ciclo principal aún debe cambiarse para que una sola CPU GB controle el SGB
+          o usar mGBA desde el primer ciclo. Audio completo y FPS no probados.
+
+          Mantener Ik Core #43. Incluye ELF, licencia MPL-2.0, licencia
+          Snes9x, documentación, scripts de construcción y verificación.
+          No incluye ROMs ni firmware propietarios.
+          EOF
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              IkCore-Hibrido-Snes9x-mGBA-Fase6-SDK.zip \
+              IkCore-Hibrido-Snes9x-mGBA-Fase6-SDK.zip.sha256 \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" \
+              IkCore-Hibrido-Snes9x-mGBA-Fase6-SDK.zip \
+              IkCore-Hibrido-Snes9x-mGBA-Fase6-SDK.zip.sha256 \
+              --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Ik Core híbrido mGBA ICD2 Fase 6 (SDK ARMhf, NO HMOD)" \
+              --notes-file NOTES.md --prerelease
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets
