@@ -4,6 +4,11 @@
  */
 #include "ikcore_sgb_audio_fifo.h"
 #include <string.h>
+#if defined(__GNUC__)
+/* In real BIOS mode the SNES-side ICD2/firmware must own the transfer.
+ * Do not also send a second copy straight to the SPC worker. */
+extern int ikcore_mgba_phase6_icd2_active(void) __attribute__((weak));
+#endif
 typedef struct {
     ikcore_sgb_audio_kind kind;
     unsigned length;
@@ -54,5 +59,9 @@ void ikcore_sgb_audio_sound_packet_hook(const uint8_t* data,unsigned len) {
     (void)ikcore_sgb_audio_queue_sound(data,len);
 }
 void ikcore_sgb_transfer_completed_hook(const uint8_t* payload,unsigned size) {
+#if defined(__GNUC__)
+    if(ikcore_mgba_phase6_icd2_active && ikcore_mgba_phase6_icd2_active())
+        return; /* BIOS processing is authoritative */
+#endif
     (void)ikcore_sgb_audio_queue_transfer(payload,size);
 }
