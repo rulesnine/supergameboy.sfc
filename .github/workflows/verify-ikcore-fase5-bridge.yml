@@ -1,0 +1,39 @@
+name: Verify Ik Core experimental SGB bridge (host only)
+on:
+  push:
+    paths:
+      - 'experimental/fase5/**'
+      - '.github/workflows/verify-ikcore-fase5-bridge.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bridge-tests:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ikcore
+      - uses: actions/checkout@v4
+        with:
+          repository: mgba-emu/mgba
+          ref: 0.10.5
+          path: mgba
+          persist-credentials: false
+      - name: Apply passive mGBA 0.10.5 SGB packet observer
+        run: |
+          python3 ikcore/experimental/fase5/tools/patch_mgba_sgb_packet_tap.py mgba/src/gb/io.c
+          cd mgba
+          git diff --check
+          grep -q 'ikcore_mgba_sgb_packet' src/gb/io.c
+      - name: Compile and execute host tests (NOT hybrid integration)
+        run: |
+          set -eu
+          cd ikcore/experimental/fase5
+          gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_bridge.c test_ik_sgb_bridge.c -o /tmp/test_bridge
+          /tmp/test_bridge
+          gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_bridge.c ik_sgb_joyp.c test_ik_sgb_joyp.c -o /tmp/test_joyp
+          /tmp/test_joyp
+          gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_bridge.c ik_sgb_mgba_tap.c test_ik_sgb_mgba_tap.c -o /tmp/test_tap
+          /tmp/test_tap
+          python3 tools/test_mgba_patch.py
