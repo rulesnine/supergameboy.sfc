@@ -20,6 +20,7 @@ typedef struct {
 } ikcore_sou_capture;
 typedef void (*ikcore_sou_complete_cb)(const uint8_t *payload, unsigned size, void *ctx);
 void ikcore_sou_capture_reset(ikcore_sou_capture *c);
+unsigned ikcore_sgb_transfer_capture_active(void);
 void ikcore_sou_capture_arm(ikcore_sou_capture *c);
 void ikcore_sou_capture_scanline(ikcore_sou_capture *c,int y,const uint16_t *pixels,unsigned width);
 bool ikcore_sou_capture_end_frame(ikcore_sou_capture *c,ikcore_sou_complete_cb cb,void *ctx);
