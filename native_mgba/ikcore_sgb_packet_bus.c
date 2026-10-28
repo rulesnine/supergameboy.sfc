@@ -12,6 +12,10 @@
  * a complete packet. The full packet bus remains for graphical commands. */
 extern void ikcore_sgb_audio_sound_packet_hook(const uint8_t *,unsigned)
     __attribute__((weak));
+/* Return: 0 = no active authentic SNES BIOS route,
+ * 1 = accepted into real ICD2, -1 = rejected (do NOT synthesize sound). */
+extern int ikcore_mgba_phase6_route_icd2_packet(const uint8_t *,unsigned)
+    __attribute__((weak));
 #endif
 static ikcore_sgb_packet queue[IKCORE_SGB_PACKET_DEPTH];
 static unsigned read_pos, write_pos, queued, dropped;
@@ -31,8 +35,17 @@ void ikcore_sgb_packet_hook(unsigned command,
         ++dropped;
         return;
     }
+    int icd2_routed=0;
 #if defined(__GNUC__)
-    if(command==IKCORE_SGB_SOUND_CMD && ikcore_sgb_audio_sound_packet_hook)
+    if(ikcore_mgba_phase6_route_icd2_packet)
+        icd2_routed=ikcore_mgba_phase6_route_icd2_packet(data,bytes);
+    if(icd2_routed<0) ++dropped;
+#endif
+#if defined(__GNUC__)
+    // BIOS-owned command traffic must NEVER also be played directly by
+    // the SPC FIFO: the SNES firmware is already processing the packet.
+    if(!icd2_routed &&
+       command==IKCORE_SGB_SOUND_CMD && ikcore_sgb_audio_sound_packet_hook)
         ikcore_sgb_audio_sound_packet_hook(data,bytes);
 #endif
     if(queued>=IKCORE_SGB_PACKET_DEPTH) {++dropped;return;}
