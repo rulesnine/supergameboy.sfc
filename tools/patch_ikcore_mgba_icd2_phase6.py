@@ -57,7 +57,8 @@ bool Emulator::ReceiveMGBAPackets(const uint8_t *packets, uint32_t size)
 '''
 s=once(s,anchor,method+anchor,"ICD2 enqueue method")
 facade="unsigned char S9xSGBGetICD2(unsigned short addr)\n{"
-s=once(s,facade,'''int S9xSGBReceiveMGBAPackets(const unsigned char *packets,unsigned size)
+s=once(s,facade,'''__attribute__((used, externally_visible, noinline))
+int S9xSGBReceiveMGBAPackets(const unsigned char *packets,unsigned size)
 {
     return SGB::Instance().ReceiveMGBAPackets(packets,size)?1:-1;
 }
