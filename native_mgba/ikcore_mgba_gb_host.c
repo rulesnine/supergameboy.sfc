@@ -9,6 +9,7 @@
 #include <mgba/core/config.h>
 #include <mgba/gb/interface.h>
 #include <mgba/internal/gb/gb.h>
+#include <mgba/internal/sm83/sm83.h>
 #include <mgba-util/vfs.h>
 #include <mgba-util/audio-buffer.h>
 #include <stdlib.h>
