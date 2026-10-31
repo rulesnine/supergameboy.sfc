@@ -11,7 +11,7 @@ def once(s,a,b,tag):
     return s.replace(a,b,1)
 def patch(s):
     s=once(s,'#include "libretro.h"\n',
-      '#include "libretro.h"\n#include "ik_spc_host.h"\n#include "ik_sgb_spc_route.h"\n#include "ik_sgb_mgba_relay.h"\n','includes')
+      '#include "libretro.h"\n#include "ik_spc_host.h"\n#include "ik_sgb_spc_route.h"\n#include "ik_sgb_bridge.h"\n','includes')
     s=once(s,'#define IKCORE_CORE_PATH "/usr/lib/ikcore-fase5-sgb/mgba_libretro.so"',
       '#define IKCORE_CORE_PATH "/usr/lib/ikcore-fase6/mgba_libretro.so"','mGBA core path')
     s=once(s,'#define IKCORE_LOG_PATH IKCORE_STATE_DIR "/ikcore-fase5-sgb-__IKCORE_RUN_NUMBER__.log"',
