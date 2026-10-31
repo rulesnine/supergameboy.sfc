@@ -12,7 +12,7 @@ TARGET = '\tif (gb->sgbBit == 128 && bits == 2) {\n\t\tGBVideoWriteSGBPacket(&gb
 PATCH = '''\tif (gb->sgbBit == 128 && bits == 2) {
 #if defined(__GNUC__)
         if (ikcore_mgba_sgb_packet) {
-            ikcore_mgba_sgb_packet(gb->sgbPacket, gb->timing.globalCycles,
+            ikcore_mgba_sgb_packet(gb->sgbPacket, (uint64_t)mTimingCurrentTime(&gb->timing),
                                    gb->video.frameCounter);
         }
 #endif
