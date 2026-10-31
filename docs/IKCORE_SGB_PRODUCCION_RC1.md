@@ -72,3 +72,15 @@ La instrumentación de comandos de borde NO prueba por sí sola fidelidad pixel 
 - **Cambio directo al marco de juego**: si hay PCT_TRN de la ROM, el video se revela tras 30 cuadros sin nuevas transferencias, para permitir completar el mapeo y evitar el marco provisional. Si la ROM no tiene mejoras SGB, se revela tras cuatro cuadros con el borde original predeterminado. Para juegos SGB que no emitan PCT_TRN hay un límite de 480 cuadros GB (~8 s), para evitar una pantalla de carga permanente; un cartucho con transferencias muy posteriores podría aun cambiar de borde más tarde.
 - **Resguardo**: no altera la emulación ni el audio validado de KOF '96, los presets PAL, el filtro GL_NEAREST, ni el fin de sesión manual SELECT+START. El límite de 120 segundos permanece eliminado.
 - **Resultado pendiente**: verificación física visual en NES Mini con KOF '96, un juego GB sin SGB y otro con su propio borde, además de confirmar que la imagen de carga aparece durante el bootstrap prolongado. CI prueba lógica de visibilidad y compilación ARMv7, no sustituye la inspección en pantalla real.
+
+## Producción RC4 — eliminación definitiva del marco intermedio de mGBA
+
+Tras la prueba del usuario con RC3, el marco gráfico genérico de mGBA todavía aparecía unos segundos antes de KOF '96. Diagnóstico en `mgba/src/gb/video.c`, `GBVideoReset`: el core **copiaba** `_defaultBorderChardata`, `_defaultBorderTilemap` y `_defaultBorderPalette` a las memorias SGB en cada reinicio. RC3 solo lo ocultaba en el frontend; la inicialización del núcleo persistía.
+
+La RC4 realiza dos controles simultáneos:
+
+- **Origen:** `patch_mgba_no_generic_border.py` impide cargar esos gráficos predeterminados en el reinicio. Inicializa en cero exclusivamente `sgbCharRam` y `sgbMapRam`. Los paquetes SGB del juego (`CHR_TRN`, `PCT_TRN`, paletas y atributos) siguen escribiéndose con el parser original intacto.
+- **Salida:** `patch_prod_original_border.py` sustituye los márgenes hasta que llegue un `PCT_TRN`: marco original capturado del BIOS SGB si existe, y de lo contrario margen mate oscuro, **nunca** el arte genérico. Se copian sin cambios los píxeles centrales 160×144 del juego.
+- **Presentación:** se conserva el Game Boy «CARGANDO» de RC3 y su espera de finalización `PCT_TRN`, con temporizador máximo de seguridad. No altera muestras, DSP, sincronización SPC ni cola de SOUND del #40. La salida por SELECT+START y ausencia de timeout siguen iguales.
+
+**Evidencia aún pendiente:** prueba física en NES Mini para confirmar que el marco de KOF aparece sin ninguna imagen decorativa intermedia y que otro juego GB sin marco propio muestra el borde auténtico SGB (si el BIOS permitió capturarlo), o el fondo neutro si no. Este último caso es una limitación indicada claramente; la RC4 no garantiza automáticamente que todos los paquetes permitan extraer el marco original de BIOS.
