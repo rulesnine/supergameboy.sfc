@@ -144,7 +144,7 @@ jobs:
           grep -q 'ik_f6_spc_set_boot_audio(ik_rc7_boot_pcm_cb)' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_f6_spc_set_boot_cancel(ik_rc7_boot_cancel)' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_f6_spc_set_boot_progress(NULL)' /tmp/ikcore_fase5_mgba_frontend.c
-          grep -q 'original SGB BIOS video only' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'no artificial splash; only original SGB BIOS video' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_audio_rate_init(&ik_rc7_boot_rate,32040u,g_audio_rate)' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKCSUSP2' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_susp_png_write' /tmp/ikcore_fase5_mgba_frontend.c
