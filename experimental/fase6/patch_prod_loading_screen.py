@@ -30,6 +30,8 @@ def patch(s,graphics):
         if(ikcore_sgb_prod_visual_stats)
             ikcore_sgb_prod_visual_stats(&pal,&attrs,&chr,&pct,&mask);
         if(!ik_prod_gate_frame(&ik_prod_gate,(uint32_t)pct,full)) {
+            if((ik_prod_gate.frames%24u)==0u)
+                ik_prod_loading_animate(ik_prod_gate.frames);
             g_video_seconds+=now_s()-t0;
             return;
         }
@@ -47,6 +49,7 @@ def patch(s,graphics):
      * Snes9x initializes the genuine Super Game Boy's SPC700/DSP. */
     ik_prod_gate_init(&ik_prod_gate,1);
     ik_prod_show_loading();
+    ik_f6_spc_set_boot_progress(ik_prod_loading_animate);
     g_padfd = open_clovercon();''',
         "display gameboy as soon as Mali EGL is up")
     s=once(s,
