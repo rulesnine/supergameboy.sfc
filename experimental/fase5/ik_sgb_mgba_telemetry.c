@@ -11,6 +11,9 @@ static IkSgbQueue queue;
 static int initialized;
 static uint64_t received, sound, transfers, last_cycles, dropped;
 static uint64_t sound_triggers, sound_transfers;
+/* Passive only: count the exact ROM-origin SGB color and border commands.
+ * Never alter their bytes, renderer data, palettes or palette timing. */
+static uint64_t prod_pal, prod_attrs, prod_chr, prod_pct, prod_mask;
 /* mGBA software renderer's SGB LCD transfer: 20 GB tiles per row,
  * 2bpp packed into the same 4096-byte layout expected by #117 SOU_TRN.
  * One emulation thread; no heap and no alternative GB renderer. */
@@ -59,6 +62,7 @@ void ikcore_fase5_sgb_reset_packets(void) {
     initialized = 1;
     received = sound = transfers = last_cycles = dropped = 0;
     sound_triggers = sound_transfers = 0;
+    prod_pal=prod_attrs=prod_chr=prod_pct=prod_mask=0;
     sou_scanlines=sou_ready=sou_dropped=0; sou_frame=0;
 }
 
@@ -70,6 +74,16 @@ void ikcore_mgba_sgb_packet(const uint8_t *data, uint64_t cycles,
     if (!initialized) ikcore_fase5_sgb_reset_packets();
     cmd = data[0] >> 3;
     ++received;
+    switch (cmd) {
+    case 0x00: case 0x01: case 0x02: case 0x03:
+    case 0x0A: case 0x0B: ++prod_pal; break;
+    case 0x04: case 0x05: case 0x06: case 0x07:
+    case 0x0C: case 0x15: case 0x16: ++prod_attrs; break;
+    case 0x13: ++prod_chr; break;
+    case 0x14: ++prod_pct; break;
+    case 0x17: ++prod_mask; break;
+    default: break;
+    }
     /* Preserve original counters displayed in prior NES Mini baselines. */
     if (cmd == 0x08 || cmd == 0x09) ++sound;
     if (cmd == 0x09 || cmd == 0x0B || cmd == 0x13 ||
@@ -107,4 +121,17 @@ void ikcore_fase5_stats(uint64_t *packets, uint64_t *sounds,
     if (sounds) *sounds = sound;
     if (trns) *trns = transfers;
     if (cycles) *cycles = last_cycles;
+}
+
+/* This is telemetry, not a palette replacement. A game-authored border
+ * becomes authoritative upon PCT_TRN; absence of PCT retains the default
+ * SGB frame that mGBA initialized in GBVideoReset. */
+void ikcore_sgb_prod_visual_stats(uint64_t *pal, uint64_t *attrs,
+                                  uint64_t *chr, uint64_t *pct,
+                                  uint64_t *mask) {
+    if (pal) *pal=prod_pal;
+    if (attrs) *attrs=prod_attrs;
+    if (chr) *chr=prod_chr;
+    if (pct) *pct=prod_pct;
+    if (mask) *mask=prod_mask;
 }
