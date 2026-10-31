@@ -11,6 +11,7 @@ typedef struct {
     void (*unload_game)(void);
     int (*boot_ready)(void);
     int (*set_frame_fps)(double);
+    int (*mailbox_stats)(uint64_t*, unsigned);
     int (*send_sound)(const unsigned char*, unsigned);
     int (*send_transfer)(const unsigned char*, unsigned);
     int (*frame)(void);
