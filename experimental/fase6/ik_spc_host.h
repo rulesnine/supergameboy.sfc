@@ -22,7 +22,7 @@ typedef struct {
     int16_t prev[2];
     int have_prev;
     uint64_t mixed, silence, clipped, sound_sent, sound_rejected;
-    uint64_t frames_advanced, buffer_overflows;
+    uint64_t frames_advanced, buffer_overflows, spc_nonzero;
 } IkF6SpcHost;
 /* SNES core is run only during firmware boot. Once N-SPC is initialized,
    NO further retro_run calls are issued; mGBA is sole GB runtime. */
