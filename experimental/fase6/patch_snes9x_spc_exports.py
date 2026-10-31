@@ -104,8 +104,11 @@ extern "C" {
 __attribute__((visibility("default")))
 size_t ikcore_spc_full_snapshot_size(void) {
     const bool8 was_sgb = Settings.SuperGameBoy;
+    const bool8 was_bios = Settings.SGB_BIOSModeActive;
     Settings.SuperGameBoy = FALSE;
+    Settings.SGB_BIOSModeActive = FALSE;
     const size_t n = S9xFreezeSize();
+    Settings.SGB_BIOSModeActive = was_bios;
     Settings.SuperGameBoy = was_sgb;
     return n;
 }
@@ -113,9 +116,12 @@ __attribute__((visibility("default")))
 bool ikcore_spc_full_snapshot_save(void *dst, size_t n) {
     if (!dst || !n || !S9xSGBPerfAudioActive()) return false;
     const bool8 was_sgb = Settings.SuperGameBoy;
+    const bool8 was_bios = Settings.SGB_BIOSModeActive;
     Settings.SuperGameBoy = FALSE;
+    Settings.SGB_BIOSModeActive = FALSE;
     const bool ok = (S9xFreezeGameMem(static_cast<uint8_t*>(dst),
                                       static_cast<uint32>(n)) == TRUE);
+    Settings.SGB_BIOSModeActive = was_bios;
     Settings.SuperGameBoy = was_sgb;
     return ok;
 }
@@ -123,9 +129,12 @@ __attribute__((visibility("default")))
 bool ikcore_spc_full_snapshot_restore(const void *src, size_t n) {
     if (!src || !n) return false;
     const bool8 was_sgb = Settings.SuperGameBoy;
+    const bool8 was_bios = Settings.SGB_BIOSModeActive;
     Settings.SuperGameBoy = FALSE;
+    Settings.SGB_BIOSModeActive = FALSE;
     const bool ok = (S9xUnfreezeGameMem(static_cast<const uint8_t*>(src),
                                         static_cast<uint32>(n)) == SUCCESS);
+    Settings.SGB_BIOSModeActive = was_bios;
     Settings.SuperGameBoy = was_sgb;
     return ok;
 }
