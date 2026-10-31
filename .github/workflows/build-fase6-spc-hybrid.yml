@@ -97,6 +97,7 @@ jobs:
           grep -q 'SPC_nonzero' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKF6 PACK OK:' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKF6 ARCHIVE source:' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'IKSGB MAILBOX' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_f6_spc_start' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_audio_rate_convert' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'plughw:0,0' /tmp/ikcore_fase5_mgba_frontend.c
@@ -177,6 +178,9 @@ jobs:
           python3 ikcore-project/experimental/fase6/patch_snes9x_spc_exports.py \
             supersnes9x/libretro/libretro.cpp
           grep -q 'ikcore_spc_set_frame_fps' supersnes9x/libretro/libretro.cpp
+          grep -q 'ikcore_spc_mailbox_stats' supersnes9x/libretro/libretro.cpp
+          grep -q 'ik_f6_dispatch_mailbox' supersnes9x/libretro/libretro.cpp
+          grep -q 'ik_f6_idle_due' supersnes9x/libretro/libretro.cpp
           grep -q 'ik_f6_cycles_per_gb_frame' supersnes9x/apu/apu.cpp
           grep -q 'ikcore_spc_boot_ready' supersnes9x/libretro/libretro.cpp
           # Snes9x's default version script exports only retro_* functions.
@@ -287,6 +291,7 @@ jobs:
           "$READELF" -Ws dist/ikcore_spc_libretro.so | grep -q 'ikcore_spc_send_sound'
           "$READELF" -Ws dist/ikcore_spc_libretro.so | grep -q 'ikcore_spc_pull_stereo'
           "$READELF" -Ws dist/ikcore_spc_libretro.so | grep -q 'ikcore_spc_set_frame_fps'
+          "$READELF" -Ws dist/ikcore_spc_libretro.so | grep -q 'ikcore_spc_mailbox_stats'
           sha256sum dist/* > dist/SHA256SUMS
       - name: Package independent F6 hybrid firmware HMOD
         run: |
