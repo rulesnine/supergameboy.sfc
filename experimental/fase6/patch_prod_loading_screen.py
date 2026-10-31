@@ -62,7 +62,7 @@ def patch(s,graphics):
         ik_prod_gate_init(&ik_prod_gate,(int)rom_sgb);
         log_printf("IKSGB LOADING classification SGB=%u initial=%ux%u"
                    " max_game_frames=%u\\n",
-                   rom_sgb,w,h,rom_sgb?480u:4u);
+                   rom_sgb,w,h,rom_sgb?120u:2u);
     }''',
         "classify game SGB support after ROM is loaded")
     return s
