@@ -138,6 +138,12 @@ bool ikcore_spc_full_snapshot_restore(const void *src, size_t n) {
     Settings.SuperGameBoy = was_sgb;
     return ok;
 }
+/* RC9 handoff boundary: SGB-owned boot ROM finished and the cartridge
+ * begins executing. The visible ROM boot will run ONCE under mGBA. */
+__attribute__((visibility("default")))
+int ikcore_spc_bios_cart_started(void) {
+    return S9xSGBBootHandoffCaptured() ? 1 : 0;
+}
 __attribute__((visibility("default")))
 int ikcore_spc_boot_ready(void) {
     return S9xSGBPerfAudioActive() ? 1 : 0;
