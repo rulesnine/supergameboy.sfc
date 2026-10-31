@@ -60,9 +60,9 @@ jobs:
           python3 ../fase6/test_prod_rc7_av_exit.py
           python3 ../fase6/test_prod_rc8_av_replay.py
           python3 ../fase6/test_prod_rc9_single_boot.py
-          grep -q 'IKSPC BOOT CUT: intro_frames=' ikcore-project/experimental/fase6/ik_spc_host.c
-          grep -q 'ikcore_spc_bios_cart_started' ikcore-project/experimental/fase6/patch_snes9x_spc_exports.py
-          grep -q 'bootav-rc9' ikcore-project/experimental/fase6/ik_sgb_boot_av.c
+          grep -q 'IKSPC BOOT CUT: intro_frames=' ../fase6/ik_spc_host.c
+          grep -q 'ikcore_spc_bios_cart_started' ../fase6/patch_snes9x_spc_exports.py
+          grep -q 'bootav-rc9' ../fase6/ik_sgb_boot_av.c
 
           gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_bridge.c ik_sgb_mgba_telemetry.c ../fase6/test_sou_trn_capture.c -I. -o /tmp/fase6-sou
           /tmp/fase6-sou
