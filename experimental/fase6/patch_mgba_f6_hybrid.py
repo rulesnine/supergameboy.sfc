@@ -124,7 +124,7 @@ int main(int argc, char **argv)
                 if (g_f6_spc.mailbox_stats(mb,9))
                     log_printf("IKSGB MAILBOX rx=%llu dispatched=%llu idle=%llu"
                                " ack=%llu retries=%llu timeout=%llu"
-                               " pending=%llu maxwait=%llu rejected=%llu\n",
+                               " pending=%llu maxwait=%llu rejected=%llu\\n",
                                (unsigned long long)mb[0],
                                (unsigned long long)mb[1],
                                (unsigned long long)mb[2],
