@@ -107,6 +107,8 @@ static void ik_prod_show_loading(void) {
  * frames including its real Nintendo presentation. Display only those
  * pixels; never fabricate logos/alter the SNES/SPC program. */
 static int ik_prod_fw_visible=0;
+static unsigned ik_prod_fw_presented=0;
+static double ik_prod_fw_next_present=0.0;
 static void ik_prod_show_firmware_video(const uint16_t *pixels,unsigned frame) {
     size_t k;unsigned different=0;
     uint16_t first;
@@ -116,6 +118,10 @@ static void ik_prod_show_firmware_video(const uint16_t *pixels,unsigned frame) {
         if(pixels[k]!=first && ++different>=12u)break;
     }
     if(different<12u)return; /* black/flat startup: keep last visible art. */
+    /* Present at most 60.0988 real frames/s without holding the emulator.
+     * If the SNES core is slower, show EVERY actual frame instead of 1/12.
+     * No interpolation, frame duplication or fabricated Nintendo artwork. */
+    if(ik_prod_fw_visible && now_s()<ik_prod_fw_next_present)return;
     g_border_fade=1.0f;
     upload_rgb565_direct(pixels,256u,224u);
     draw_texture_frame(256u,224u);
@@ -127,6 +133,11 @@ static void ik_prod_show_firmware_video(const uint16_t *pixels,unsigned frame) {
     if(!ik_prod_fw_visible)
         log_printf("IKSGB FWVIDEO: LIVE_SNES_BIOS frame=%u; authentic border/intro\\n",frame);
     ik_prod_fw_visible=1;
+    ++ik_prod_fw_presented;
+    ik_prod_fw_next_present=now_s()+(1.0/60.0988);
+    if(frame%240u==0u)
+        log_printf("IKSGB FWVIDEO: source=REAL_SNESPPC presented=%u source_frame=%u cap_hz=60.10\\n",
+                   ik_prod_fw_presented,frame);
 }
 /* Animated dots driven by actual firmware progress or by emulated GB frames. */
 static void ik_prod_loading_animate(unsigned ticks) {
