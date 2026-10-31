@@ -9,6 +9,8 @@ static void _writeSGBBits(struct GB* gb, int bits) {
 }'''
 out = patch(sample)
 assert out.count('ikcore_mgba_sgb_packet(gb->sgbPacket') == 1
+assert 'mTimingCurrentTime(&gb->timing)' in out
+assert 'gb->timing.globalCycles' not in out
 assert out.count('GBVideoWriteSGBPacket(&gb->video, gb->sgbPacket);') == 1
 assert patch(out)==out
 try:
