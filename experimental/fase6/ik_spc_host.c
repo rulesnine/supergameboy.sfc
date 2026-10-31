@@ -25,7 +25,7 @@
 #define IK_PROD_BORDER_PIXELS (256u * 224u)
 static uint16_t g_prod_boot_frame[IK_PROD_BORDER_PIXELS];
 static unsigned g_prod_boot_frames;
-static enum retro_pixel_format g_prod_boot_format = RETRO_PIXEL_FORMAT_RGB565;
+static enum retro_pixel_format g_prod_boot_format = RETRO_PIXEL_FORMAT_0RGB1555;
 struct IkProdCacheHeader {
     uint64_t magic, pack_fingerprint;
     uint32_t serialized_bytes, border_valid;
