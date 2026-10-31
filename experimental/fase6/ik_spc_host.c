@@ -8,6 +8,7 @@
 #define _GNU_SOURCE
 #include "ik_spc_host.h"
 #include "ik_sgb_boot_av.h"
+#include "ik_sgb_boot_pane.h"
 #include "libretro.h"
 #include <dlfcn.h>
 #include <stdio.h>
@@ -194,6 +195,10 @@ static void (*g_prod_boot_progress)(unsigned);
 static void (*g_prod_boot_video)(const uint16_t *,unsigned);
 static size_t (*g_prod_boot_audio)(const int16_t *,size_t);
 static unsigned long g_boot_pcm_frames;
+/* RC10: live SGB firmware frame, but never render its duplicate GB boot ROM. */
+static int (*g_rc10_bios_gb_released)(void);
+static IkSgbBootPane g_rc10_pane;
+
 static int (*g_prod_boot_cancel)(void);
 void ik_f6_spc_set_boot_cancel(int (*callback)(void)) {
     g_prod_boot_cancel=callback;
@@ -269,6 +274,12 @@ static void no_video(const void *p,unsigned w,unsigned h,size_t pitch)
         } else return;
     }
     ++g_prod_boot_frames;
+    ik_sgb_pane_filter(&g_rc10_pane,g_prod_boot_frame,
+         g_rc10_bios_gb_released?g_rc10_bios_gb_released():0,
+         g_prod_boot_frames);
+    /* The SGB SNES animation continues after ICD2 GB release.
+     * Only its duplicated internal GB screen is frozen. Keep all
+     * authentic SNES outer border frames and ALL SNES audio. */
     ikboot_video(g_prod_boot_frame,g_prod_boot_frames);
     /* Deliver every genuine SGB video frame. The frontend performs 60Hz
      * presentation gating only when the core runs ahead; it never slows
@@ -362,6 +373,7 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     SYM(resume,"ikcore_spc_cache_restore_activate");
     SYM(bios_pct_count,"ikcore_spc_bios_border_pct_count");
     SYM(bios_gb_released,"ikcore_spc_bios_gb_released");
+    g_rc10_bios_gb_released=bios_gb_released;
 #undef SYM
     set_environment(snes_environment);
     set_video(no_video);
@@ -380,6 +392,7 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     h->loaded=1;
     clock_gettime(CLOCK_MONOTONIC,&boot_start_wall);
     g_prod_boot_frames=0;g_prod_stock_valid=0;
+    memset(&g_rc10_pane,0,sizeof g_rc10_pane);
     memset(g_prod_boot_frame,0,sizeof g_prod_boot_frame);
     memset(g_prod_stock_border,0,sizeof g_prod_stock_border);
     pack_hash=ik_prod_hash_pack(pack);
@@ -457,6 +470,10 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     }
     ik_prod_cache_save(h,pack_hash,serialize_size,serialize,log);
     ikboot_end(1);
+    if(log)log("IKSGB RC10 PANEGATE: gb_release_frame=%u frozen_pane_frames=%u"
+               " snes_video_total=%u snes_border_animated=1 mGBA_restart=0\\n",
+               g_rc10_pane.release_frame,g_rc10_pane.held_frames,
+               g_prod_boot_frames);
     if(log) {
         clock_gettime(CLOCK_MONOTONIC,&boot_end_wall);
         double seconds=(double)(boot_end_wall.tv_sec-boot_start_wall.tv_sec)+
