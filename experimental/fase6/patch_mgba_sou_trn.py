@@ -20,7 +20,7 @@ def patch(s):
     # Put declarations at the real (non-prototype) FinishScanline definition,
     # after all header includes, so no extra headers are required.
     s=s.replace(entry,DEFS+entry,1)
-    a=s.indexOf(entry); b=s.index(finish,a)
+    a=s.index(entry); b=s.index(finish,a)
     scan=s[a:b]
     scan_target='''\tif (softwareRenderer->sgbTransfer == 1) {
 \t\tsize_t offset'''
