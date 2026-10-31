@@ -32,6 +32,12 @@ int ikcore_spc_send_sou_trn(const unsigned char *data, unsigned bytes) {
     return 1;
 }
 __attribute__((visibility("default")))
+int ikcore_spc_set_frame_fps(double fps) {
+    if (fps < 50.0 || fps > 65.0) return 0;
+    S9xSGBPerfAudioSetFrameHz(fps);
+    return 1;
+}
+__attribute__((visibility("default")))
 int ikcore_spc_frame(void) {
     if (!S9xSGBPerfAudioActive()) return 0;
 #ifdef IKCORE_SGB_PERF_AUDIO_THREADED
