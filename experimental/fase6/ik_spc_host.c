@@ -190,6 +190,10 @@ done:
 
 static IkF6Log g_log;
 static void (*g_prod_boot_progress)(unsigned);
+static void (*g_prod_boot_video)(const uint16_t *,unsigned);
+void ik_f6_spc_set_boot_video(void (*callback)(const uint16_t *,unsigned)) {
+    g_prod_boot_video=callback;
+}
 void ik_f6_spc_set_boot_progress(void (*callback)(unsigned)) {
     g_prod_boot_progress=callback;
 }
