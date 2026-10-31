@@ -73,7 +73,7 @@ static int ik_prod_cache_load(IkF6SpcHost *h,uint64_t hash,
     ik_prod_cache_path(path,sizeof path,hash);
     fp=fopen(path,"rb");
     if(!fp) {
-        if(log)log("IKSPC FASTBOOT cache=ABSENT errno=%d (pack-dependent cold boot)\\n",errno);
+        if(log)log("IKSPC FASTBOOT cache=ABSENT errno=%d (pack-dependent cold boot)\n",errno);
         return 0;
     }
     if(fread(&hdr,1,sizeof hdr,fp)!=sizeof hdr ||
