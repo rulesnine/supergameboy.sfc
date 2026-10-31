@@ -35,3 +35,12 @@ La salida ALSA es activa y continua; `written` != 0, confirmando el transporte d
 ## Validación visual necesaria
 
 El registro suministrado no contiene la línea inicial `IKSGB model=... border=... geometry=...`, ni captura de la imagen mostrada. Se desconoce si el marco y las paletas se representan correctamente en la pantalla física. Esa comprobación es independiente de los contadores SGB.
+
+## Confirmación visual posterior del usuario (KOF '96)
+
+El usuario confirmó explícitamente que en KOF '96 **el juego, las paletas SGB y el marco cargan correctamente**, que **el audio normal de Game Boy sí se escucha** y que **no se oyen los efectos ni el audio mejorado del SNES**. Esto cierra la revisión visual de KOF '96 para el HMOD #26, **no** constituye una validación de compatibilidad universal para otros juegos.
+
+Por tanto no se necesitan más cambios de paleta/marco para este juego en la rama experimental; la prioridad es conectar el audio SPC700/DSP a partir del camino N-SPC que ya existía en la implementación #117. El contador `SOUND=79` agrupaba `SOUND` (0x08) y `SOU_TRN` (0x09) y no prueba que se hayan reproducido sonidos SNES.
+
+Se añadieron `experimental/fase5/ik_sgb_spc_route.{h,c}` y sus pruebas unitarias: adaptan los paquetes `SOUND` exactos y solicitudes `SOU_TRN` a callbacks para un futuro motor SPC inicializado, pero **sin un backend conectado no generan audio SNES ni son un HMOD híbrido**. Para `SOU_TRN` hace falta captura íntegra del transfer LCD de 4096 bytes y no basta el paquete de 16 bytes.
+
