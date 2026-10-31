@@ -38,6 +38,8 @@ jobs:
           /tmp/fase5-bridge
           gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_bridge.c ik_sgb_mgba_tap.c test_ik_sgb_mgba_tap.c -o /tmp/fase5-tap
           /tmp/fase5-tap
+          gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_bridge.c ik_sgb_mgba_telemetry.c test_ik_sgb_mgba_relay.c -o /tmp/fase5-relay
+          /tmp/fase5-relay
           gcc -std=c11 -Wall -Wextra -Werror -O2 ik_audio_rate_adapter.c test_ik_audio_rate_adapter.c -o /tmp/fase5-audio-rate
           /tmp/fase5-audio-rate
           python3 tools/test_mgba_patch.py
@@ -102,6 +104,9 @@ jobs:
           printf '\ntarget_sources(mgba_libretro PRIVATE "%s")\n' \
              "$GITHUB_WORKSPACE/ikcore-project/experimental/fase5/ik_sgb_mgba_telemetry.c" \
              >> mgba/CMakeLists.txt
+          printf 'target_sources(mgba_libretro PRIVATE "%s")\n' \
+             "$GITHUB_WORKSPACE/ikcore-project/experimental/fase5/ik_sgb_bridge.c" \
+             >> mgba/CMakeLists.txt
           # mGBA sets M_LIBRARY=m in normal variable scope; -DM_LIBRARY cache is ignored.
           # Force PIC-safe dynamic libm from the NES Mini-compatible Xenial sysroot.
           sed -i "s|set(M_LIBRARY m)|set(M_LIBRARY \"$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6\")|" mgba/CMakeLists.txt
@@ -155,6 +160,7 @@ jobs:
           done
           "$READELF" -Ws dist/mgba_libretro.so | grep -q 'ikcore_fase5_stats'
           "$READELF" -Ws dist/mgba_libretro.so | grep -q 'ikcore_fase5_sgb_status'
+          "$READELF" -Ws dist/mgba_libretro.so | grep -q 'ikcore_fase5_sgb_pop_packet'
           sha256sum dist/* > dist/SHA256SUMS
       - name: Package isolated diagnostic GB HMOD without overwrites
         run: |
