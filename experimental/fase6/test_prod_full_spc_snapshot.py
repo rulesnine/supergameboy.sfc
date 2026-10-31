@@ -37,7 +37,7 @@ bool8 S9xFreezeGameMem(uint8 *out,uint32 n) {
 }
 int S9xUnfreezeGameMem(const uint8 *in,uint32 n) {
     return (!Settings.SuperGameBoy && !Settings.SGB_BIOSModeActive &&
-            n==400u && std::memcmp(in,"#!s9xsnp:",10u)==0) ? SUCCESS : -1;
+            n==400u && std::memcmp(in,"#!s9xsnp:",9u)==0) ? SUCCESS : -1;
 }
 extern "C" {
 ''' + bridge + r'''
