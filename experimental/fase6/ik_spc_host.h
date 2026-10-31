@@ -10,6 +10,7 @@ typedef struct {
     void (*deinit)(void);
     void (*unload_game)(void);
     int (*boot_ready)(void);
+    int (*set_frame_fps)(double);
     int (*send_sound)(const unsigned char*, unsigned);
     int (*send_transfer)(const unsigned char*, unsigned);
     int (*frame)(void);
@@ -27,7 +28,7 @@ typedef struct {
 /* SNES core is run only during firmware boot. Once N-SPC is initialized,
    NO further retro_run calls are issued; mGBA is sole GB runtime. */
 int ik_f6_spc_start(IkF6SpcHost *h, const char *snes_library,
-                    const char *user_pack, unsigned output_rate,
+                    const char *user_pack, unsigned output_rate, double gb_fps,
                     IkF6Log log);
 void ik_f6_spc_stop(IkF6SpcHost *h);
 /* Run exactly once per GB frame BEFORE mGBA's audio callback. */
