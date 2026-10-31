@@ -7,6 +7,7 @@
 - **Base congelada:** commit `6afcfcba59f3f72471a3a8ce8aac932044fc5ecc` (Fase 6 #40; funcionamiento a 59.73 FPS y sonido SNES SPC700 validado físicamente con KOF '96).
 - mGBA 0.10.5 — CPU, PPU, APU y parser de SGB; Snes9x #117 aislado para los efectos SPC700/DSP.
 - Se mantienen los 3 mecanismos presentes en #40: forzar SGB solamente para ROMs compatibles DMG; dibujar el marco genérico incluido en mGBA al reset; respetar los paquetes PALxx/ATTR/CHR_TRN/PCT_TRN enviados por la ROM sin recolor ni reemplazo.
+- **Paletas predeterminadas de Super Game Boy:** opción nativa de mGBA 0.10.5 `mgba_gb_colors_preset=2`, exclusivamente presets SGB conocidos por título, no de GBC; si un cartucho envía sus propias instrucciones PAL, estas conservan la prioridad. Sin preset del título, permanece la paleta base.
 - **Sin alteración del renderizador:** RGB565 hardware, `GL_NEAREST` para evitar interpolación y paletas originales de SGB de 15 bits provenientes del cartucho.
 - Instrumentación de producción pasiva: `IKSGB VISUAL` identifica paquetes de paleta y confirma si llegó `PCT_TRN`; el SGB sigue aplicando los paquetes originales de mGBA sin filtrarlos.
 - Si la ROM no envía PCT_TRN, el marco genérico de mGBA permanece. Una ROM que solo envía PALETAS, sin marco, mantiene ese marco genérico y aplica los colores de la ROM.
