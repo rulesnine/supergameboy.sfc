@@ -24,8 +24,14 @@ def patch(s):
             }
             return false; /* leave every other core option unchanged */
         }'''
-    if s.count(a)!=1:raise ValueError(f"mGBA SGB palette option anchor count={s.count(a)}")
-    s=s.replace(a,b,1)
+    if s.count(a)==1:
+        s=s.replace(a,b,1)
+    else:
+        # The physically approved #40 frontend already enabled these options
+        # in prepare_mgba_physical.py. Keep that exact known-good behavior.
+        if ('if (!strcmp(v->key, "mgba_gb_colors_preset")) { v->value = "2"; return true; }' not in s or
+            'if (!strcmp(v->key, "mgba_sgb_borders")) { v->value = "ON"; return true; }' not in s):
+            raise ValueError("mGBA original SGB palette policy missing")
     a='''    log_printf("video path  : RGB565 Mali; borde SGB atomico, fade visual desactivado\\n");'''
     b='''    log_printf("IKSGB palette policy: hardware Super Game Boy presets ONLY (mgba_gb_colors_preset=2), game-authored PAL overrides preserved\\n");
     log_printf("video path  : RGB565 Mali; borde SGB atomico, fade visual desactivado\\n");'''
