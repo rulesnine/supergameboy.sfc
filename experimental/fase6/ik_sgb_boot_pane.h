@@ -18,7 +18,7 @@
 #define IK_SGB_PANE_HEIGHT 144u
 #define IK_SGB_FRAME_WIDTH 256u
 #define IK_SGB_PANE_X 48u
-#define IK_SGB_PANE_Y 40u
+#define IK_SGB_PANE_Y 39u /* Snes9x SGB ICD2 compositing uses Y=39 */
 typedef struct {
     uint16_t saved[IK_SGB_PANE_WIDTH*IK_SGB_PANE_HEIGHT];
     unsigned pre_release_frames,held_frames,release_frame;
