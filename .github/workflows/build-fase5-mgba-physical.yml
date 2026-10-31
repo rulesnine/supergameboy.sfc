@@ -40,6 +40,8 @@ jobs:
           /tmp/fase5-tap
           gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_bridge.c ik_sgb_mgba_telemetry.c test_ik_sgb_mgba_relay.c -o /tmp/fase5-relay
           /tmp/fase5-relay
+          gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_spc_route.c test_ik_sgb_spc_route.c -o /tmp/fase5-spc-route
+          /tmp/fase5-spc-route
           gcc -std=c11 -Wall -Wextra -Werror -O2 ik_audio_rate_adapter.c test_ik_audio_rate_adapter.c -o /tmp/fase5-audio-rate
           /tmp/fase5-audio-rate
           python3 tools/test_mgba_patch.py
