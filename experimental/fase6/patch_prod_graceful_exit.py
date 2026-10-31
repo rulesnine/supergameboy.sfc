@@ -21,6 +21,10 @@ static volatile sig_atomic_t ik_rc6_exit_signal=0;
 static void ik_rc6_on_signal(int sig) {
     if(!ik_rc6_exit_signal)ik_rc6_exit_signal=(sig_atomic_t)sig;
 }
+/* Called from the emulator thread, never from the async signal handler. */
+static int ik_rc7_boot_cancel(void) {
+    return ik_rc6_exit_signal!=0 || g_swap_failed!=0;
+}
 static int ik_rc6_install_signal_handlers(void) {
     struct sigaction sa;
     memset(&sa,0,sizeof sa);
