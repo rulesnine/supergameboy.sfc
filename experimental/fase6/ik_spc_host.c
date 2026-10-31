@@ -220,6 +220,7 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     bool (*unserialize)(const void *,size_t)=NULL;
     int (*resume)(void)=NULL;
     uint64_t pack_hash=0;
+    struct timespec boot_start_wall={0,0}, boot_end_wall={0,0};
     struct retro_game_info game;
     unsigned i;
     if (!h || !so || !pack || !out_rate) return 0;
@@ -276,6 +277,7 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
         goto fail;
     }
     h->loaded=1;
+    clock_gettime(CLOCK_MONOTONIC,&boot_start_wall);
     g_prod_boot_frames=0;
     memset(g_prod_boot_frame,0,sizeof g_prod_boot_frame);
     pack_hash=ik_prod_hash_pack(pack);
@@ -311,8 +313,11 @@ boot_done:
     }
     if(log) log("IKSPC initialized=1 boot_frames=%u GB_fps=%.5f SPC_cycles_per_frame=%.2f SNES GB CPU STOPPED\n",
                 h->boot_frames, gb_fps, 1024000.0/gb_fps);
-    if(log)log("IKSPC FASTBOOT hit=%d border_valid=%d\n",
-              h->fastboot_cache_hit,h->original_border_valid);
+    clock_gettime(CLOCK_MONOTONIC,&boot_end_wall);
+    if(log)log("IKSPC FASTBOOT hit=%d border_valid=%d startup_ms=%lu\n",
+              h->fastboot_cache_hit,h->original_border_valid,
+              (unsigned long)((boot_end_wall.tv_sec-boot_start_wall.tv_sec)*1000L+
+              (boot_end_wall.tv_nsec-boot_start_wall.tv_nsec)/1000000L));
     return 1;
 fail:
     ik_f6_spc_stop(h);
