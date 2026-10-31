@@ -10,8 +10,32 @@ finish() {
   if [ -n "$TMP" ] && [ -d "$TMP" ]; then rm -rf "$TMP"; fi
 }
 trap finish 0
-trap 'exit 130' 2
-trap 'exit 143' 15
+# Clover may send RESET termination to the shell wrapper rather than
+# its child. Relay the signal, allow the child to flush SRAM/suspend PNG,
+# and only then remove the temporary extracted .sfc. Never orphan the core.
+IK_CHILD=
+ik_stop_child() {
+  rc=$1
+  trap - 1 2 3 15
+  if [ -n "$IK_CHILD" ]; then
+    kill -TERM "$IK_CHILD" 2>/dev/null || :
+    # Bounded cleanup for a hung core: avoid indefinite C8/menu freezes.
+    for n in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 "$IK_CHILD" 2>/dev/null || break
+      sleep 0.5
+    done
+    if kill -0 "$IK_CHILD" 2>/dev/null; then
+      kill -KILL "$IK_CHILD" 2>/dev/null || :
+    fi
+    wait "$IK_CHILD" 2>/dev/null || :
+    IK_CHILD=
+  fi
+  exit "$rc"
+}
+trap 'ik_stop_child 129' 1
+trap 'ik_stop_child 130' 2
+trap 'ik_stop_child 131' 3
+trap 'ik_stop_child 143' 15
 
 if [ ! -x "$CORE" ]; then
   echo "IKQS ERROR: falta el ejecutable del emulador: $CORE" >&2
@@ -72,8 +96,12 @@ case "$1" in
         set -- "$GAME" "$@"
         ;;
     esac
-    "$CORE" "$@"
-    exit $?
+    "$CORE" "$@" &
+    IK_CHILD=$!
+    rc=0
+    wait "$IK_CHILD" || rc=$?
+    IK_CHILD=
+    exit "$rc"
     ;;
   *)
     # Do not alter existing .gb/.sfc invocation behavior.
