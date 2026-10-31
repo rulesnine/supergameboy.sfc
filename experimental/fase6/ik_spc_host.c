@@ -52,7 +52,7 @@ static void ik_prod_cache_path(char *out,size_t len,uint64_t hash) {
 /* Full firmware snapshot must contain Snes9x CPU/APU/DSP state, not
  * the ordinary GB-only "SGB!" libretro snapshot. */
 static int ik_prod_full_snes_snapshot(const uint8_t *p,size_t n) {
-    return p && n>=16u && memcmp(p,"#!s9xsnp:",10u)==0;
+    return p && n>=16u && memcmp(p,"#!s9xsnp:",sizeof("#!s9xsnp:")-1u)==0;
 }
 static uint32_t ik_prod_state_check32(const uint8_t *p,size_t n) {
     uint32_t h=2166136261u;
