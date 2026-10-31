@@ -39,6 +39,13 @@ jobs:
           gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_bridge.c ik_sgb_mgba_tap.c test_ik_sgb_mgba_tap.c -o /tmp/fase5-tap
           /tmp/fase5-tap
           python3 tools/test_mgba_patch.py
+          g++ -std=c++17 -Wall -Wextra -Werror -O2 -I"$GITHUB_WORKSPACE/supersnes9x/sgb" \
+            "$GITHUB_WORKSPACE/supersnes9x/sgb/sgb_packet.cpp" \
+            "$GITHUB_WORKSPACE/ikcore-project/experimental/fase5/test_snes9x_raw_packet.cpp" \
+            -o /tmp/fase5-sgb-raw
+          /tmp/fase5-sgb-raw
+          python3 tools/patch_snes9x_icd2_inject.py "$GITHUB_WORKSPACE/supersnes9x"
+          grep -q 'S9xSGBInjectRawMGBAPacket' "$GITHUB_WORKSPACE/supersnes9x/sgb/sgb.cpp"
           cd "$GITHUB_WORKSPACE"
           python3 ikcore-project/experimental/fase5/tools/patch_mgba_sgb_packet_tap.py mgba/src/gb/io.c
           grep -q 'ikcore_mgba_sgb_packet(gb->sgbPacket' mgba/src/gb/io.c
