@@ -66,7 +66,7 @@ static int ik_prod_cache_load(IkF6SpcHost *h,uint64_t hash,
                               size_t (*get_size)(void),
                               bool (*restore)(const void *,size_t),
                               int (*resume)(void),IkF6Log log) {
-    struct IkProdCacheHeader hdr;
+    struct IkProdCacheHeader hdr={0};
     char path[256];FILE *fp=NULL;uint8_t *buf=NULL;
     size_t size=0, expected=0;int ok=0;
     const char *reason="unknown";
