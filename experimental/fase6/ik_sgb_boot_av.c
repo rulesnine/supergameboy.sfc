@@ -1,4 +1,4 @@
-/* Ik Core RC8: original user-owned SGB1 BIOS audiovisual replay.
+/* Ik Core RC9: SGB-only intro A/V; cartridge boot is owned by mGBA.
  * Cold boot runs the *real* SNES BIOS, saves losslessly delta-encoded frames
  * and 32040 Hz stereo PCM; warm launch restores SNES/SPC then presents the
  * same firmware-generated intro at video cadence ~60.0988Hz.
@@ -20,7 +20,7 @@
 #endif
 #define IK_BOOT_PIXELS (256u*224u)
 #define IK_BOOT_LIMIT (32u*1024u*1024u)
-#define IK_BOOT_MAGIC "IKAV0001"
+#define IK_BOOT_MAGIC "IKAV0002"
 #define IK_BOOT_MAXREC (4800u*4u)
 typedef struct {
     char magic[8];
@@ -42,7 +42,7 @@ typedef struct {
 } IkBootState;
 static IkBootState g_av;
 static void ikboot_path(char *dst,size_t n,uint64_t hash) {
-    snprintf(dst,n,IK_BOOT_DIR "/boot-%016llx.bootav",
+    snprintf(dst,n,IK_BOOT_DIR "/boot-%016llx.bootav-rc9",
              (unsigned long long)hash);
 }
 static uint32_t ikboot_check(uint32_t h,const void *data,size_t n) {
@@ -54,7 +54,7 @@ static uint32_t ikboot_check(uint32_t h,const void *data,size_t n) {
 static int ikboot_header(FILE *f,uint64_t hash,IkBootHeader *h) {
     struct stat st;
     if(!f||fread(h,1,sizeof(*h),f)!=sizeof(*h))return 0;
-    if(memcmp(h->magic,IK_BOOT_MAGIC,8)||h->version!=1u||
+    if(memcmp(h->magic,IK_BOOT_MAGIC,8)||h->version!=2u||
        h->fingerprint!=hash||h->video_frames<30u||
        h->video_frames>4800u||h->records<h->video_frames||
        h->records>IK_BOOT_MAXREC||h->bytes>IK_BOOT_LIMIT)
@@ -160,7 +160,7 @@ void ikboot_end(int successful) {
        g_av.audio_frames>=256u && g_av.hash) {
         memset(&h,0,sizeof h);
         memcpy(h.magic,IK_BOOT_MAGIC,8);
-        h.fingerprint=g_av.hash;h.version=1u;
+        h.fingerprint=g_av.hash;h.version=2u;
         h.video_frames=g_av.video_frames;
         h.audio_frames=g_av.audio_frames;
         h.records=g_av.records;h.bytes=g_av.bytes;h.checksum=g_av.checksum;
