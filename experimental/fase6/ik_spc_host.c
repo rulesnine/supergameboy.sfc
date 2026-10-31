@@ -180,7 +180,6 @@ static void queue_audio(IkF6SpcHost *h, const int16_t *samples,size_t frames) {
    No truncation of sample-rate by simply relabelling the PCM stream. */
 static void resample_push(IkF6SpcHost *h,const int16_t *p,int frames) {
     double phase,step;
-    int idx;
     int16_t next[4096];
     int count=0;
     if(!frames)return;
