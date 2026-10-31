@@ -191,6 +191,11 @@ done:
 static IkF6Log g_log;
 static void (*g_prod_boot_progress)(unsigned);
 static void (*g_prod_boot_video)(const uint16_t *,unsigned);
+static size_t (*g_prod_boot_audio)(const int16_t *,size_t);
+static unsigned long g_boot_pcm_frames;
+void ik_f6_spc_set_boot_audio(size_t (*callback)(const int16_t *,size_t)) {
+    g_prod_boot_audio=callback;
+}
 void ik_f6_spc_set_boot_video(void (*callback)(const uint16_t *,unsigned)) {
     g_prod_boot_video=callback;
 }
@@ -259,14 +264,23 @@ static void no_video(const void *p,unsigned w,unsigned h,size_t pitch)
         } else return;
     }
     ++g_prod_boot_frames;
-    /* Present the REAL firmware's SNES video, not fabricated Nintendo art.
-     * Throttled to one frame in 12 to protect the Cortex-A7 boot budget. */
-    if(g_prod_boot_video && (g_prod_boot_frames%12u)==0u)
+    /* Deliver every genuine SGB video frame. The frontend performs 60Hz
+     * presentation gating only when the core runs ahead; it never slows
+     * the SNES firmware or fabricates animation frames. */
+    if(g_prod_boot_video)
         g_prod_boot_video(g_prod_boot_frame,g_prod_boot_frames);
 }
-static void no_audio(short l,short r) {(void)l;(void)r;}
-static size_t no_audio_batch(const short *p,size_t frames)
-{(void)p;return frames;}
+static void no_audio(short l,short r) {
+    const int16_t pair[2]={(int16_t)l,(int16_t)r};
+    if(g_prod_boot_audio) {
+        g_prod_boot_pcm_frames += g_prod_boot_audio(pair,1u);
+    }
+}
+static size_t no_audio_batch(const short *p,size_t frames) {
+    if(g_prod_boot_audio && p && frames)
+        g_prod_boot_pcm_frames += g_prod_boot_audio((const int16_t*)p,frames);
+    return frames;
+}
 static void no_input_poll(void){}
 static int16_t no_input(unsigned port,unsigned device,unsigned index,unsigned id)
 {(void)port;(void)device;(void)index;(void)id;return 0;}
@@ -378,6 +392,7 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
         memset(g_prod_boot_frame,0,sizeof g_prod_boot_frame);
         memset(g_prod_stock_border,0,sizeof g_prod_stock_border);
     }
+    g_boot_pcm_frames=0u;
     if(log) log("IKSPC original SGB firmware boot started (max 4800 frames)\n");
     for (i=0;i<4800;++i) {
         if(h->boot_ready()) break;
@@ -419,6 +434,8 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
         log("IKSGB BORDER source=FALLBACK (stock BIOS frame not safely captured)\n");
     }
     ik_prod_cache_save(h,pack_hash,serialize_size,serialize,log);
+    if(log)log("IKSPC BOOT AV: SNES_video_frames=%u SNES_PCM_frames=%lu cold=1\n",
+               g_prod_boot_frames,g_boot_pcm_frames);
 boot_done:
     h->ready=h->boot_ready();
     if (!h->set_frame_fps(gb_fps)) {
