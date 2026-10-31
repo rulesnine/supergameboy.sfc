@@ -200,6 +200,7 @@ jobs:
             /tmp/ikcore_fase5_mgba_frontend.c \
             "$GITHUB_WORKSPACE/ikcore-project/experimental/fase5/ik_audio_rate_adapter.c" \
             "$GITHUB_WORKSPACE/ikcore-project/experimental/fase5/ik_sgb_spc_route.c" \
+            "$GITHUB_WORKSPACE/ikcore-project/experimental/fase5/ik_sgb_bridge.c" \
             "$GITHUB_WORKSPACE/ikcore-project/experimental/fase6/ik_spc_host.c" \
             -o dist/ikcore-fase5-mgba-n2 \
             -Wl,-rpath-link,"$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf" \
