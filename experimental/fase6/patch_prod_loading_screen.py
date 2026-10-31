@@ -50,6 +50,7 @@ def patch(s,graphics):
     ik_prod_gate_init(&ik_prod_gate,1);
     ik_prod_show_loading();
     ik_f6_spc_set_boot_progress(ik_prod_loading_animate);
+    ik_f6_spc_set_boot_video(ik_prod_show_firmware_video);
     g_padfd = open_clovercon();''',
         "display gameboy as soon as Mali EGL is up")
     s=once(s,
