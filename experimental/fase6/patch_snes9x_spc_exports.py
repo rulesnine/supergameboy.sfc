@@ -97,6 +97,25 @@ __attribute__((visibility("default")))
 int ikcore_spc_boot_ready(void) {
     return S9xSGBPerfAudioActive() ? 1 : 0;
 }
+/* Called ONLY after successful Snes9x savestate restore. The validated #40
+ * SPC RAM and DSP registers come from that state; the transient PERF2
+ * activation flag was outside the savestate and must be re-enabled. */
+__attribute__((visibility("default")))
+int ikcore_spc_cache_restore_activate(void) {
+    if(!S9xSGBPerfAudioActive()) {
+        S9xSGBEnterPerfDirectMode();
+        S9xSGBPerfAudioEnable();
+        Settings.SGB_BIOSModeActive=FALSE;
+        Settings.SuperGameBoy=TRUE;
+        Settings.PAL=FALSE;
+        Settings.FrameTime=Settings.FrameTimeNTSC;
+    }
+    ik_f6_rd=ik_f6_len=ik_f6_echo_wait=0;
+    ik_f6_await=ik_f6_idle_due=false;
+    ik_f6_rx=ik_f6_sent=ik_f6_idle=ik_f6_ack=ik_f6_retries=0;
+    ik_f6_timeout=ik_f6_rejected=ik_f6_maxwait=0;
+    return S9xSGBPerfAudioActive()?1:0;
+}
 __attribute__((visibility("default")))
 int ikcore_spc_send_sound(const unsigned char *packet, unsigned len) {
     if (!packet || len < 16 || (packet[0] >> 3) != 0x08 ||
