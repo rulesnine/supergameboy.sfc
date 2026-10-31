@@ -16,6 +16,7 @@ static int ikcore_extract_clv_id(const char *text,char id[16]) {
     const char *p;
     if(!text)return 0;
     for(p=text;(p=strstr(p,"CLV-"))!=NULL;++p) {
+        if(strlen(p)<11u)break;
         int i,ok=(p[4]>='A'&&p[4]<='Z'&&p[5]=='-');
         if(!ok)continue;
         for(i=6;i<11;++i) {
