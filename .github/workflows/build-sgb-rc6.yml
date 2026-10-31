@@ -144,7 +144,7 @@ jobs:
           grep -q 'ik_prod_overlay_bios_border' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'no_mgba_generic=1' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'MATTE_NO_GENERIC' /tmp/ikcore_fase5_mgba_frontend.c
-          grep -q 'while (!g_shutdown_requested && !g_swap_failed)' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'while (!g_shutdown_requested && !g_swap_failed && !ik_rc6_exit_signal)' /tmp/ikcore_fase5_mgba_frontend.c
           ! grep -q 'timeout 120 s' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKF6 ALSA retry' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'SPC_nonzero' /tmp/ikcore_fase5_mgba_frontend.c
