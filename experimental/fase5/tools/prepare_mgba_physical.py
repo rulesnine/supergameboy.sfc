@@ -30,6 +30,7 @@ def patch(s):
          '            struct retro_variable *v = (struct retro_variable *)data;\n'
          '            if (!strcmp(v->key, "mgba_gb_model")) { v->value = "Super Game Boy"; return true; }\n'
          '            if (!strcmp(v->key, "mgba_sgb_borders")) { v->value = "ON"; return true; }\n'
+         '            if (!strcmp(v->key, "mgba_gb_colors_preset")) { v->value = "2"; return true; }\n'
          '            if (!strcmp(v->key, "mgba_use_bios")) { v->value = "OFF"; return true; }\n'
          '            return false;\n'
          '        }', 'sgb options'),
