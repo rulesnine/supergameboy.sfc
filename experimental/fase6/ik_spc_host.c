@@ -20,11 +20,13 @@
 #include <errno.h>
 /* The SGB firmware cache contains a user-owned machine state; never shipped. */
 #define IK_PROD_CACHE_DIR "/var/lib/hakchi/sgb-native-test/ikcore-sgb-prod-cache"
-#define IK_PROD_CACHE_MAGIC 0x53474250524f4402ULL
+#define IK_PROD_CACHE_MAGIC 0x53474250524f4403ULL
 #define IK_PROD_MAX_STATE (48u * 1024u * 1024u)
 #define IK_PROD_BORDER_PIXELS (256u * 224u)
 static uint16_t g_prod_boot_frame[IK_PROD_BORDER_PIXELS];
 static unsigned g_prod_boot_frames;
+static uint16_t g_prod_stock_border[IK_PROD_BORDER_PIXELS];
+static int g_prod_stock_valid;
 static enum retro_pixel_format g_prod_boot_format = RETRO_PIXEL_FORMAT_0RGB1555;
 struct IkProdCacheHeader {
     uint64_t magic, pack_fingerprint;
@@ -219,6 +221,8 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     bool (*serialize)(void *,size_t)=NULL;
     bool (*unserialize)(const void *,size_t)=NULL;
     int (*resume)(void)=NULL;
+    unsigned (*bios_pct_count)(void)=NULL;
+    int (*bios_gb_released)(void)=NULL;
     uint64_t pack_hash=0;
     struct timespec boot_start_wall={0,0}, boot_end_wall={0,0};
     struct retro_game_info game;
@@ -261,6 +265,8 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     SYM(serialize,"retro_serialize");
     SYM(unserialize,"retro_unserialize");
     SYM(resume,"ikcore_spc_cache_restore_activate");
+    SYM(bios_pct_count,"ikcore_spc_bios_border_pct_count");
+    SYM(bios_gb_released,"ikcore_spc_bios_gb_released");
 #undef SYM
     set_environment(snes_environment);
     set_video(no_video);
@@ -278,8 +284,9 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     }
     h->loaded=1;
     clock_gettime(CLOCK_MONOTONIC,&boot_start_wall);
-    g_prod_boot_frames=0;
+    g_prod_boot_frames=0;g_prod_stock_valid=0;
     memset(g_prod_boot_frame,0,sizeof g_prod_boot_frame);
+    memset(g_prod_stock_border,0,sizeof g_prod_stock_border);
     pack_hash=ik_prod_hash_pack(pack);
     if(ik_prod_cache_load(h,pack_hash,serialize_size,unserialize,resume,log))
         goto boot_done;
@@ -287,6 +294,16 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     for (i=0;i<4800;++i) {
         if(h->boot_ready()) break;
         run();
+        /* Do not confuse the game's own SGB border with BIOS default.
+         * Capture after SGB releases GB but BEFORE the first game PCT_TRN.
+         * Once PCT arrives, freeze the last genuine BIOS border. */
+        if(bios_gb_released && bios_pct_count &&
+           bios_gb_released() && bios_pct_count()==0 &&
+           ik_prod_border_usable(g_prod_boot_frame)) {
+            memcpy(g_prod_stock_border,g_prod_boot_frame,
+                   sizeof g_prod_stock_border);
+            g_prod_stock_valid=1;
+        }
         if(log && (i+1u)%600u==0)
             log("IKSPC firmware boot frames=%u ready=%d\n",i+1u,h->boot_ready());
     }
@@ -296,13 +313,20 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
         if(log) log("IKSPC firmware boot incomplete: audio SNES disabled\n");
         goto fail;
     }
-    if (ik_prod_border_usable(g_prod_boot_frame)) {
+    if(g_prod_stock_valid) {
+        memcpy(h->original_border_rgb565,g_prod_stock_border,
+               sizeof h->original_border_rgb565);
+        h->original_border_valid=1;
+        if(log)log("IKSGB BORDER source=BIOS_STOCK_BEFORE_GAME_PCT pixels=256x224\n");
+    } else if(bios_pct_count && bios_pct_count()==0 &&
+              ik_prod_border_usable(g_prod_boot_frame)) {
+        /* A game without custom PCT: last BIOS frame is still the default. */
         memcpy(h->original_border_rgb565,g_prod_boot_frame,
                sizeof h->original_border_rgb565);
         h->original_border_valid=1;
-        if(log)log("IKSGB BORDER source=BIOS_original pixels=256x224\n");
+        if(log)log("IKSGB BORDER source=BIOS_STOCK_NO_PCT pixels=256x224\n");
     } else if(log) {
-        log("IKSGB BORDER source=FALLBACK (no usable RGB565 BIOS frame)\n");
+        log("IKSGB BORDER source=FALLBACK (stock BIOS frame not safely captured)\n");
     }
     ik_prod_cache_save(h,pack_hash,serialize_size,serialize,log);
 boot_done:
