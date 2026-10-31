@@ -22,11 +22,10 @@ def once(s,a,b,label):
 def patch(root):
     h=root/"apu"/"apu.h"
     s=h.read_text()
-    a="""void  S9xSGBPerfAudioFrame(void);
-void  S9xSGBPerfSoundCommand"""
-    b="""void  S9xSGBPerfAudioFrame(void);
-void  S9xSGBPerfAudioSetFrameHz(double hz);
-void  S9xSGBPerfSoundCommand"""
+    # The #117 parallel-audio patch adds declarations between Frame
+    # and SoundCommand. Anchor solely on the stable Frame declaration.
+    a="void  S9xSGBPerfAudioFrame(void);"
+    b="void  S9xSGBPerfAudioFrame(void);\nvoid  S9xSGBPerfAudioSetFrameHz(double hz);"
     s=once(s,a,b,"F6-only audio rate declaration")
     h.write_text(s)
 
