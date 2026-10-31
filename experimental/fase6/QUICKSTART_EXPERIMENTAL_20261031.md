@@ -24,3 +24,26 @@ Aislamiento: las cachés antiguas en ikcore-sgb-prod-cache permanecen intactas. 
 Pruebas: la prueba mock C++ local g++ -std=c++17 -Wall -Wextra -Werror pasó para comprobar tamaño constante, guardado/restauración y restauración de banderas. El test que extrae las funciones reales del puente se añadió como test_prod_full_spc_snapshot.py al flujo ARMv7, antes de compilar. Primera ejecución sin caché v4 necesita BIOS; la segunda con el MISMO SGBPACK1 debería reutilizar el nuevo estado, pero no se afirma un tiempo ni audio hardware validados. Castlevania II con 4800 frames y SNES audio disabled es un problema independiente que esta corrección no soluciona.
 
 Compilación aislada definida en .github/workflows/build-sgb-quickstart.yml. No afirmar un HMOD publicado sin verificar un artifact compilado y su SHA-256.
+
+
+## RC5: recuperados guardado interno y suspensión Clover (adaptación en fuente)
+
+En versiones anteriores #25 existían tools/patch_ikcore_sram.py, tools/patch_ikcore_suspend.py y native_n2/ikcore_suspend.inc; la ruta mGBA del frontend no llamaba a esas funciones y su launcher .7z descartaba los argumentos --save-on-quit, --save-screenshot-on-quit y --load-state-file. Ahora experimental/fase6/patch_prod_persistence.py reutiliza el codificador PNG, parser de argumentos y fichero atómico del módulo original, pero cambia el estado a versión IKCSUSP2 para mGBA; **IKCSUSP1 antiguo no se abre ni sobrescribe**. La restauración del estado GB ocurre después del primer cuadro mGBA, no durante BIOS Snes9x. Ningún estado de mGBA contiene ni sustituye la caché de firmware SPC700/DSP (subsistemas separados).
+
+La SRAM utiliza RETRO_MEMORY_SAVE_RAM de mGBA y se guarda por hash FNV-1a del contenido de la ROM Game Boy, nunca por la ruta aleatoria /tmp de un 7z. Directorio nuevo /var/lib/hakchi/ikcore-quick-saves, carga antes del primer cuadro; revisión cada 5 s y escritura al salir solo si hubo cambios. Si hay juego CLV inequívoco, con archivo nuevo ausente y SRAM de tamaño coincidente, puede importar una copia de /var/lib/hakchi/ikcore-saves/<CLV-ID>.srm de la implementación #25; el original no se reescribe. Un estado restaurado no fuerza la sobrescritura de esa SRAM; el shadow se reasigna tras la restauración.
+
+El lanzador independiente experimental/fase6/ikcore-quick-launcher.sh ahora conserva los argumentos Hakchi después de extraer un .sfc.7z. El workflow de compilación separado invoca patch_prod_persistence.py antes del compilador ARMv7 y test_prod_persistence.py para detectar regresiones.
+
+### Prueba física sin alterar el RC4
+1. **Antes** de instalar: respaldar las carpetas /var/lib/hakchi/ikcore-saves, /var/lib/hakchi/sgb-native-test/ikcore-sgb-prod-cache y los datos Clover (si existen). Nunca borrar los save files.
+2. Compilar RC5 desde .github/workflows/build-sgb-quickstart.yml en rama experimental/ikcore-sgb-startup-short-20261031. Confirmar Actions verde, artifact IkCore-SGB-QuickStart-RC5 y SHA-256 del HMOD.
+3. Instalar el HMOD experimental (nombre de comandos /bin/ikcore-sgb-quick-7z y /bin/ikcore-sgb-quick). No desinstalar RC4; usar una entrada de juego duplicada para la prueba.
+4. Reproducir dos arranques del mismo SGBPACK1. Buscar en log ikcore-sgb-quick-*.log: IKSPC FASTBOOT cache=ABSENT/SAVED en frío y cache=HIT con startup_ms significativamente menor en caliente; consultar IKSAVE SRAM NEW/LOAD/SAVE.
+5. Para cartucho que realmente soporte guardado interno, crear progreso, salir con RESET de NES Mini, reabrir y comprobar progreso. Para Clover, activar puntos de suspensión de Hakchi y verificar que el lanzamiento entrega --save-on-quit y --save-screenshot-on-quit; comprobar vista PNG y restauración del punto (IKSAVE SUSP LOAD OK). El viejo formato IKCSUSP1 no puede restaurarse en mGBA; conservarlo.
+6. Verificar marco original SGB, marco del juego, ausencia de borde GBA, sonido SPC (ej. máquina de escribir KOF96), color y FPS. Si falla, volver al comando RC4 previo y conservar archivos.
+7. Sin artifact de CI y pruebas reales de NES Mini, este código sigue siendo candidato experimental, NO versión final probada.
+
+### Logs sugeridos
+- grep -h -E 'IKSPC FASTBOOT|IKSAVE SRAM|IKSAVE SUSP' /var/lib/hakchi/sgb-native-test/ikcore-sgb-quick-*.log 2>/dev/null
+- find /var/lib/hakchi/ikcore-quick-saves -maxdepth 1 -name '*.srm' -ls 2>/dev/null
+- Las fechas de consola pueden ser 1970. Comparar logs por nombre de versión y ejecución, no confiar exclusivamente en ls -t.
