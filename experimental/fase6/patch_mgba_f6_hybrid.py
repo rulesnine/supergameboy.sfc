@@ -103,7 +103,23 @@ int main(int argc, char **argv)
             }
         }
 ''','SPC advance and packet routing on one emulation thread')
-    s=once(s,'            last_run_frames = run_frames;',
+    s=once(s,'            if (g_f6_ready && g_f6_spc.mailbox_stats) {
+                uint64_t mb[9]={0};
+                if (g_f6_spc.mailbox_stats(mb,9))
+                    log_printf("IKSGB MAILBOX rx=%llu dispatched=%llu idle=%llu"
+                               " ack=%llu retries=%llu timeout=%llu"
+                               " pending=%llu maxwait=%llu rejected=%llu\\n",
+                               (unsigned long long)mb[0],
+                               (unsigned long long)mb[1],
+                               (unsigned long long)mb[2],
+                               (unsigned long long)mb[3],
+                               (unsigned long long)mb[4],
+                               (unsigned long long)mb[5],
+                               (unsigned long long)mb[6],
+                               (unsigned long long)mb[7],
+                               (unsigned long long)mb[8]);
+            }
+            last_run_frames = run_frames;',
       '''            log_printf("IKSPC initialized=%d SOUND received=%llu sent=%llu"
                        " undelivered=%llu SOU_TRN=%llu transfer_done=%llu"
                        " SNES_PCM_mixed=%llu silent=%llu FIFO=%zu"
