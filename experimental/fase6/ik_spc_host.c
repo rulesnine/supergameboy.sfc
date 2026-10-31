@@ -131,6 +131,10 @@ done:
 }
 
 static IkF6Log g_log;
+static void (*g_prod_boot_progress)(unsigned);
+void ik_f6_spc_set_boot_progress(void (*callback)(unsigned)) {
+    g_prod_boot_progress=callback;
+}
 static const char *g_system_directory="/var/lib/hakchi/sgb-native-test";
 static void snes_log(enum retro_log_level level,const char *fmt, ...) {
     /* SNES core sometimes emits frequent debug messages; print errors only.
@@ -294,6 +298,8 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     for (i=0;i<4800;++i) {
         if(h->boot_ready()) break;
         run();
+        if(g_prod_boot_progress && (i % 120u)==119u)
+            g_prod_boot_progress(i+1u);
         /* Do not confuse the game's own SGB border with BIOS default.
          * Capture after SGB releases GB but BEFORE the first game PCT_TRN.
          * Once PCT arrives, freeze the last genuine BIOS border. */
