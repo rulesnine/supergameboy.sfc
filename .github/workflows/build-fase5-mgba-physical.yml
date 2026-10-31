@@ -38,6 +38,8 @@ jobs:
           /tmp/fase5-bridge
           gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_bridge.c ik_sgb_mgba_tap.c test_ik_sgb_mgba_tap.c -o /tmp/fase5-tap
           /tmp/fase5-tap
+          gcc -std=c11 -Wall -Wextra -Werror -O2 ik_audio_rate_adapter.c test_ik_audio_rate_adapter.c -o /tmp/fase5-audio-rate
+          /tmp/fase5-audio-rate
           python3 tools/test_mgba_patch.py
           g++ -std=c++17 -Wall -Wextra -Werror -O2 -I"$GITHUB_WORKSPACE/supersnes9x/sgb" \
             "$GITHUB_WORKSPACE/supersnes9x/sgb/sgb_packet.cpp" \
@@ -51,6 +53,10 @@ jobs:
           grep -q 'ikcore_mgba_sgb_packet(gb->sgbPacket' mgba/src/gb/io.c
           python3 ikcore-project/experimental/fase5/tools/prepare_mgba_physical.py \
             ikcore-project/native_n2/sgbpack_native_n2.c /tmp/ikcore_fase5_mgba_frontend.c
+          python3 ikcore-project/experimental/fase5/tools/patch_mgba_alsa_resample.py \
+            /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'ik_audio_rate_convert' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'plughw:0,0' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q '/usr/lib/ikcore-fase5/mgba_libretro.so' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKMGBA SGB packets' /tmp/ikcore_fase5_mgba_frontend.c
       - name: Install cross-compiler and verification tools
@@ -119,7 +125,10 @@ jobs:
             -std=gnu11 -O3 -pipe -march=armv7-a -mtune=cortex-a7 \
             -mfpu=neon-vfpv4 -mfloat-abi=hard -D_FILE_OFFSET_BITS=64 \
             -I"$GITHUB_WORKSPACE/supersnes9x/libretro" \
-            /tmp/ikcore_fase5_mgba_frontend.c -o dist/ikcore-fase5-mgba-n2 \
+            -I"$GITHUB_WORKSPACE/ikcore-project/experimental/fase5" \
+            /tmp/ikcore_fase5_mgba_frontend.c \
+            "$GITHUB_WORKSPACE/ikcore-project/experimental/fase5/ik_audio_rate_adapter.c" \
+            -o dist/ikcore-fase5-mgba-n2 \
             -Wl,-rpath-link,"$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf" \
             "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libdl.so.2"
           cp mgba-build/mgba_libretro.so dist/mgba_libretro.so
@@ -167,6 +176,7 @@ jobs:
             'NOT the completed hybrid: NO original SNES SPC/DSP audio.' \
             'Requires a user-owned .gb or .gbc file, NOT SGBPACK1.' \
             'Run /bin/ikcore-fase5-mgba /path/to/game.gb' \
+            'ALSA fix: negotiate PCM rate and resample 32768 Hz without speed changes.' \
             'Log: /var/lib/hakchi/sgb-native-test/ikcore-fase5-mgba-*.log' \
             'Does NOT touch Ik Core #43 or /bin/sgbpack-native.' \
             > stage/README-F5.txt
