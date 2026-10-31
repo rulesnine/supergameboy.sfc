@@ -130,14 +130,17 @@ jobs:
             /tmp/ikcore_fase5_mgba_frontend.c
           python3 ikcore-project/experimental/fase6/patch_prod_graceful_exit.py \
             /tmp/ikcore_fase5_mgba_frontend.c
+          python3 ikcore-project/experimental/fase6/patch_rc7_snes_boot_audio.py \
+            /tmp/ikcore_fase5_mgba_frontend.c
           set -x  # show exactly which post-patch source assertion fails
           grep -q 'IKSGB LOADING HANDOFF' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKSAVE SRAM SAVE' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKEXIT handlers=' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_prod_show_firmware_video' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_f6_spc_set_boot_video' /tmp/ikcore_fase5_mgba_frontend.c
-          grep -q 'ik_f6_spc_set_boot_audio(audio_batch_cb)' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'ik_f6_spc_set_boot_audio(ik_rc7_boot_pcm_cb)' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_f6_spc_set_boot_cancel(ik_rc7_boot_cancel)' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'ik_audio_rate_init(&ik_rc7_boot_rate,32040u,g_audio_rate)' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKCSUSP2' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_susp_png_write' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_suspend_maybe_restore' /tmp/ikcore_fase5_mgba_frontend.c
