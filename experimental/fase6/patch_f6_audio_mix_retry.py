@@ -78,7 +78,8 @@ def patch(s):
     # Match SPC audio to mGBA input first, then resample merged audio to ALSA.
     s=once(s,'ik_f6_select_pack(argc,argv),g_audio_rate,log_printf)',
              'ik_f6_select_pack(argc,argv),'
-             '(unsigned)(avinfo.timing.sample_rate+0.5),log_printf)',
+             '(unsigned)(avinfo.timing.sample_rate+0.5),'
+           'avinfo.timing.fps,log_printf)',
              "native GB/SPC shared sample rate")
     s=once(s,
            'static const char *devices[] = {"default", "plughw:0,0", "hw:0,0"};',
