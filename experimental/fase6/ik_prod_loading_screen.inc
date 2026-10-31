@@ -102,3 +102,13 @@ static void ik_prod_show_loading(void) {
     if(!ik_prod_load_phase)log_printf("IKSGB LOADING: GAME_BOY_FRAME CARGANDO visible\n");
     ik_prod_load_phase=1;
 }
+
+/* Animated dots driven by actual firmware progress or by emulated GB frames. */
+static void ik_prod_loading_animate(unsigned ticks) {
+    unsigned step=(ticks/24u)%4u, i;
+    if(!ik_prod_load_built)return;
+    ik_prod_rect(112,95,37,5,0xBDE9u);
+    for(i=0;i<3;i++)
+        if(i<step)ik_prod_rect(113+(int)i*11,95,5,5,0x2946u);
+    ik_prod_show_loading();
+}
