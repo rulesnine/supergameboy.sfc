@@ -7,8 +7,8 @@ from pathlib import Path
 import sys
 def patch(s):
     anchors={
-        "    ik_prod_show_loading();":"    /* RC8: no artificial loading picture; show real SGB firmware video only. */",
-        "    ik_f6_spc_set_boot_progress(ik_prod_loading_animate);":"    ik_f6_spc_set_boot_progress(NULL); /* no fabricated loading animation */",
+        "    ik_prod_show_loading();\\n    ik_f6_spc_set_boot_progress(ik_prod_loading_animate);":
+            "    /* RC8: no artificial splash; only original SGB BIOS video. */\\n    ik_f6_spc_set_boot_progress(NULL);",
         "                ik_prod_loading_animate(ik_prod_gate.frames);":"                (void)ik_prod_gate.frames; /* keep real firmware picture */"
     }
     for a,b in anchors.items():
