@@ -377,10 +377,10 @@ jobs:
           rmdir "$rootfs/usr/lib/ikcore-sgb-prod" 2>/dev/null || true
           EOF
           cat > stage/readme.txt <<'EOF'
-          Ik Core SGB Production Candidate RC2 - Nintendo NES Mini ARMv7
+          Ik Core SGB Production RC4 - Nintendo NES Mini ARMv7
           BASE: physically validated Ik Core Phase 6 #40; mGBA v0.10.5 + Snes9x #117 SPC700/DSP.
           GAME BOY SGB: preserves original game PAL/ATTR/CHR_TRN/PCT_TRN messages; game-authored border and palettes.
-          NORMAL GAME BOY: forces SGB-compatible model, keeps SGB default frame if no PCT_TRN, loads real SGB title-based palette presets (mGBA gb.colors=2) when known; otherwise original grayscale fallback.
+          NORMAL GAME BOY: no generic mGBA bezel; use authentic BIOS SGB frame if valid, otherwise matte fallback until a game provides its own PCT_TRN. SGB color presets preserved.
           AUDIO: original SNES SGB mailbox / ACK #40 preserved. User-owned SGBPACK1 firmware needed for SGB SPC features; no commercial ROM/BIOS bundled.
           SUPPORT: .gb, .gbc, .dmg, .gb.7z, .gbc.7z, .sfc and .sfc.7z SGBPACK1. CGB-only games cannot run on original SGB; color-only mode unsupported in this profile.
           HAKCHI CE command: /bin/ikcore-sgb-prod-7z "/var/lib/hakchi/games/.storage/CLV-.../GAME.gb.7z"
@@ -394,7 +394,7 @@ jobs:
           NO GENERIC BORDER: mGBA initial CHR/map RAM is blank, source artwork never loaded; frontend applies user BIOS border or matte fallback until ROM PCT_TRN replaces it.
           BOOT: verified Snes9x savestate cached locally keyed by firmware hash; first run can still cost full firmware boot; warm launches should be quicker. Never bundle BIOS/ROM in cache.
           PLAY: no 120-second test exit, run until SELECT+START hold or Clover normal shutdown.
-          VALIDATION: RC2 requires physical tests across GB non-SGB and games with authored SGB borders, palettes and sound; never claim full compatibility before evidence.
+          VALIDATION: RC4 requires physical tests across GB non-SGB and games with authored SGB borders, palettes and sound; never claim full compatibility before evidence.
           SEPARATE MODULE: installs only /usr/lib/ikcore-sgb-prod and /bin/ikcore-sgb-prod*; stable #26, #43, F6 #40 unchanged.
           LOGGER: /var/lib/hakchi/sgb-native-test/ikcore-sgb-prod-*.log
           CREDITS: Rulesnine — project owner; OpenAI — development assistance; mGBA contributors; Snes9x contributors; Hakchi CE; p7zip.
