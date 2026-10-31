@@ -268,6 +268,8 @@ jobs:
           cp dist/ikcore_spc_libretro.so stage/usr/lib/ikcore-fase6/
           cp dist/7zr stage/usr/lib/ikcore-fase6/
           cp ikcore-project/experimental/fase6/ikcore-fase6-hybrid-launcher.sh stage/bin/ikcore-fase6-hybrid
+          cp stage/bin/ikcore-fase6-hybrid stage/bin/ikcore-fase6-7z
+          cp p7zip/License.txt stage/LICENSE-7ZR.txt
           cat > stage/install <<'EOF'
           #!/bin/sh
           mkdir -p "$rootfs/usr/lib/ikcore-fase6"
@@ -276,20 +278,23 @@ jobs:
           copy "./usr/lib/ikcore-fase6/ikcore_spc_libretro.so" "$rootfs/usr/lib/ikcore-fase6/ikcore_spc_libretro.so"
           copy "./usr/lib/ikcore-fase6/7zr" "$rootfs/usr/lib/ikcore-fase6/7zr"
           copy "./bin/ikcore-fase6-hybrid" "$rootfs/bin/ikcore-fase6-hybrid"
-          chmod +x "$rootfs/bin/ikcore-fase6-hybrid" "$rootfs/usr/lib/ikcore-fase6/ikcore-fase6-n2" "$rootfs/usr/lib/ikcore-fase6/7zr"
+          copy "./bin/ikcore-fase6-7z" "$rootfs/bin/ikcore-fase6-7z"
+          chmod +x "$rootfs/bin/ikcore-fase6-hybrid" "$rootfs/bin/ikcore-fase6-7z" "$rootfs/usr/lib/ikcore-fase6/ikcore-fase6-n2" "$rootfs/usr/lib/ikcore-fase6/7zr"
           EOF
           cat > stage/uninstall <<'EOF'
           #!/bin/sh
-          rm -f "$rootfs/bin/ikcore-fase6-hybrid"
+          rm -f "$rootfs/bin/ikcore-fase6-hybrid" "$rootfs/bin/ikcore-fase6-7z"
           rm -f "$rootfs/usr/lib/ikcore-fase6/ikcore-fase6-n2"
           rm -f "$rootfs/usr/lib/ikcore-fase6/mgba_libretro.so" "$rootfs/usr/lib/ikcore-fase6/ikcore_spc_libretro.so" "$rootfs/usr/lib/ikcore-fase6/7zr"
           rmdir "$rootfs/usr/lib/ikcore-fase6" 2>/dev/null || true
           EOF
-          chmod 755 stage/install stage/uninstall stage/bin/ikcore-fase6-hybrid stage/usr/lib/ikcore-fase6/ikcore-fase6-n2 stage/usr/lib/ikcore-fase6/7zr
+          chmod 755 stage/install stage/uninstall stage/bin/ikcore-fase6-hybrid stage/bin/ikcore-fase6-7z stage/usr/lib/ikcore-fase6/ikcore-fase6-n2 stage/usr/lib/ikcore-fase6/7zr
           printf '%s\n' \
             'Fase 6 EXPERIMENTAL: mGBA GB CPU/PPU/APU + separate original Ik Core #117 SGB N-SPC audio' \
             'No firmware, BIOS or commercial ROM is bundled; supply user-owned SGBPACK1.' \
-            'One-file original Hakchi: /bin/ikcore-fase6-hybrid /var/games/CLV-.../juego.sfc.7z' \
+            'One-file original Hakchi: /bin/ikcore-fase6-7z /var/games/CLV-.../juego.sfc.7z' \
+            'Alternative: /bin/ikcore-fase6-hybrid accepts the same .sfc.7z' \
+            '7zr source: p7zip project; see LICENSE-7ZR.txt for license/credits.' \
             'One-file uncompressed: /bin/ikcore-fase6-hybrid /path/game_SGBPACK1.sfc' \
             'Bundled ARMv7 7zr extracts to private /tmp, validates pack CRC, deletes tmp on exit.' \
             'Optional two-file: /bin/ikcore-fase6-hybrid /path/KOF96.gb /path/KOF96_SGBPACK.sfc' \
