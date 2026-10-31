@@ -159,11 +159,11 @@ static bool snes_environment(unsigned command,void *data) {
     case RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE:
         *(int*)data=3;return true;
     case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT:
-        if ((*(enum retro_pixel_format*)data)==RETRO_PIXEL_FORMAT_RGB565) {
-            g_prod_boot_format=RETRO_PIXEL_FORMAT_RGB565;
+        if ((*(enum retro_pixel_format*)data)==RETRO_PIXEL_FORMAT_RGB565 ||
+            (*(enum retro_pixel_format*)data)==RETRO_PIXEL_FORMAT_0RGB1555) {
+            g_prod_boot_format=*(enum retro_pixel_format*)data;
             return true;
         }
-        /* 0RGB1555 is not RGB565: reject rather than corrupt colors. */
         return false;
     case RETRO_ENVIRONMENT_SET_GEOMETRY:
     case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO:
@@ -175,9 +175,21 @@ static void no_video(const void *p,unsigned w,unsigned h,size_t pitch)
 {
     unsigned y;const uint8_t *src=(const uint8_t*)p;
     if(!p || w!=256 || h<224 || pitch<512 || pitch>8192)return;
-    for(y=0;y<224;y++)
-        memcpy(&g_prod_boot_frame[(size_t)y*256u],
-               src+(size_t)y*pitch,512);
+    for(y=0;y<224;y++) {
+        uint16_t *dst=&g_prod_boot_frame[(size_t)y*256u];
+        const uint16_t *row=(const uint16_t*)(const void*)(src+(size_t)y*pitch);
+        unsigned x;
+        if(g_prod_boot_format==RETRO_PIXEL_FORMAT_RGB565) {
+            memcpy(dst,row,512);
+        } else if(g_prod_boot_format==RETRO_PIXEL_FORMAT_0RGB1555) {
+            for(x=0;x<256;x++) {
+                uint16_t p=row[x];
+                unsigned r=(p>>10u)&31u,gg=(p>>5u)&31u,bb=p&31u;
+                unsigned g6=(gg<<1u)|(gg>>4u);
+                dst[x]=(uint16_t)((r<<11u)|(g6<<5u)|bb);
+            }
+        } else return;
+    }
     ++g_prod_boot_frames;
 }
 static void no_audio(short l,short r) {(void)l;(void)r;}
@@ -283,8 +295,7 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
         if(log) log("IKSPC firmware boot incomplete: audio SNES disabled\n");
         goto fail;
     }
-    if (g_prod_boot_format==RETRO_PIXEL_FORMAT_RGB565 &&
-        ik_prod_border_usable(g_prod_boot_frame)) {
+    if (ik_prod_border_usable(g_prod_boot_frame)) {
         memcpy(h->original_border_rgb565,g_prod_boot_frame,
                sizeof h->original_border_rgb565);
         h->original_border_valid=1;
