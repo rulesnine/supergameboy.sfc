@@ -54,6 +54,7 @@ jobs:
           /tmp/sgb-prod-visual-test
           gcc -std=c11 -Wall -Wextra -Werror -O2 -I../fase6 ../fase6/test_prod_loading_gate.c -o /tmp/sgb-prod-loading-test
           /tmp/sgb-prod-loading-test
+          python3 ikcore-project/experimental/fase6/test_prod_full_spc_snapshot.py
           gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_bridge.c ik_sgb_mgba_telemetry.c ../fase6/test_sou_trn_capture.c -I. -o /tmp/fase6-sou
           /tmp/fase6-sou
           gcc -std=c11 -Wall -Wextra -Werror -O2 \
