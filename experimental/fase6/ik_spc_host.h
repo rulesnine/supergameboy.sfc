@@ -25,6 +25,13 @@ typedef struct {
     int have_prev;
     uint64_t mixed, silence, clipped, sound_sent, sound_rejected;
     uint64_t frames_advanced, buffer_overflows, spc_nonzero;
+    /* Production-only: original SGB1 firmware bezel captured before handoff.
+       The central 160x144 pane is never overwritten. */
+    uint16_t original_border_rgb565[256u * 224u];
+    int original_border_valid;
+    int fastboot_cache_hit;
+    unsigned boot_frames;
+
 } IkF6SpcHost;
 /* SNES core is run only during firmware boot. Once N-SPC is initialized,
    NO further retro_run calls are issued; mGBA is sole GB runtime. */
