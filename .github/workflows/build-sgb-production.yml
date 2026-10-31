@@ -1,4 +1,4 @@
-name: Ik Core SGB Production RC3 ARMv7 NES Mini
+name: Ik Core SGB Production RC4 ARMv7 NES Mini
 on:
   workflow_dispatch:
   push:
@@ -81,6 +81,13 @@ jobs:
           python3 ikcore-project/experimental/fase5/tools/patch_mgba_sgb_packet_tap.py mgba/src/gb/io.c
           python3 ikcore-project/experimental/fase5/tools/patch_mgba_sgb_force_model.py mgba/src/gb/core.c
           python3 ikcore-project/experimental/fase5/tools/patch_mgba_sgb_default_border.py mgba/src/gb/video.c
+          # Remove hardcoded mGBA default border artwork at the ORIGINAL
+          # source, not just by delaying frontend presentation.
+          python3 ikcore-project/experimental/fase6/patch_mgba_no_generic_border.py mgba/src/gb/video.c
+          grep -q 'IK PROD: never seed mGBA' mgba/src/gb/video.c
+          ! grep -q 'memcpy(video->renderer->sgbCharRam, _defaultBorderChardata' mgba/src/gb/video.c
+          ! grep -q 'memcpy(video->renderer->sgbMapRam, _defaultBorderTilemap' mgba/src/gb/video.c
+          grep -q 'memset(video->renderer->sgbMapRam, 0, SGB_SIZE_MAP_RAM)' mgba/src/gb/video.c
           python3 ikcore-project/experimental/fase5/tools/patch_mgba_sgb_diagnostics.py mgba/src/platform/libretro/libretro.c
           python3 ikcore-project/experimental/fase6/patch_mgba_sou_trn.py mgba/src/gb/renderers/software.c
           grep -q 'ikcore_mgba_sou_trn_scanline' mgba/src/gb/renderers/software.c
@@ -119,6 +126,8 @@ jobs:
           grep -q 'ik_prod_show_loading();' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKSGB LOADING classification' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_prod_overlay_bios_border' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'no_mgba_generic=1' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'MATTE_NO_GENERIC' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'while (!g_shutdown_requested && !g_swap_failed)' /tmp/ikcore_fase5_mgba_frontend.c
           ! grep -q 'timeout 120 s' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKF6 ALSA retry' /tmp/ikcore_fase5_mgba_frontend.c
@@ -381,7 +390,8 @@ jobs:
           SHARP PIXELS: nearest-neighbor hardware filtering, no interpolation enabled by Ik Core.
           FRAME: actual user-provided SGB1 BIOS RGB565 frame captured and persisted per firmware; game PCT_TRN overrides.
           LOADING: Game Boy pixel-art CARGANDO screen displayed immediately after EGL init; hides intermediary mGBA border until game PCT_TRN settles (30 frames) or fallback is due.
-          GAME SGB: last PCT stable before handoff; otherwise 480-frame bounded fallback. DMG: direct default after 4 frames. Neither guard suspends CPU or sound.
+          GAME SGB: last PCT stable before handoff; otherwise 480-frame bounded fallback. DMG: original BIOS border after 4 frames. Neither guard suspends CPU or sound.
+          NO GENERIC BORDER: mGBA initial CHR/map RAM is blank, source artwork never loaded; frontend applies user BIOS border or matte fallback until ROM PCT_TRN replaces it.
           BOOT: verified Snes9x savestate cached locally keyed by firmware hash; first run can still cost full firmware boot; warm launches should be quicker. Never bundle BIOS/ROM in cache.
           PLAY: no 120-second test exit, run until SELECT+START hold or Clover normal shutdown.
           VALIDATION: RC2 requires physical tests across GB non-SGB and games with authored SGB borders, palettes and sound; never claim full compatibility before evidence.
@@ -396,15 +406,15 @@ jobs:
           grep -q 'ikcore-sgb-prod-n2' stage/bin/ikcore-sgb-prod
           test -x stage/usr/lib/ikcore-sgb-prod/7zr
           test ! -e stage/bin/ikcore-fase6-7z
-          tar -C stage -czf "IkCore-SGB-Production-RC3-$GITHUB_RUN_NUMBER.hmod" .
-          sha256sum "IkCore-SGB-Production-RC3-$GITHUB_RUN_NUMBER.hmod" > "IkCore-SGB-Production-RC3-$GITHUB_RUN_NUMBER.hmod.sha256"
+          tar -C stage -czf "IkCore-SGB-Production-RC4-$GITHUB_RUN_NUMBER.hmod" .
+          sha256sum "IkCore-SGB-Production-RC4-$GITHUB_RUN_NUMBER.hmod" > "IkCore-SGB-Production-RC4-$GITHUB_RUN_NUMBER.hmod.sha256"
       - name: Upload production candidate artifact
         uses: actions/upload-artifact@v4
         with:
-          name: IkCore-SGB-Production-RC3
+          name: IkCore-SGB-Production-RC4
           path: |
-            IkCore-SGB-Production-RC3-*.hmod
-            IkCore-SGB-Production-RC3-*.hmod.sha256
+            IkCore-SGB-Production-RC4-*.hmod
+            IkCore-SGB-Production-RC4-*.hmod.sha256
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 30
