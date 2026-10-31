@@ -25,6 +25,8 @@ fi
 case "$1" in
   *.sfc.7z|*.SFC.7Z|*.gb.7z|*.GB.7Z|*.gbc.7z|*.GBC.7Z)
     ARCHIVE=$1
+    IKF6_ORIGINAL_ARCHIVE=$ARCHIVE
+    export IKF6_ORIGINAL_ARCHIVE
     if [ ! -f "$ARCHIVE" ]; then
       echo "IKF6 ERROR: no existe el archivo comprimido: $ARCHIVE" >&2
       exit 2
