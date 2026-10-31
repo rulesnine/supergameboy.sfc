@@ -34,13 +34,13 @@ static int ik_rc6_install_signal_handlers(void) {
 }
 """
     s=once(s,"int main(int argc, char **argv)\n{",helper+"\nint main(int argc, char **argv)\n{","signal handler")
-    s=once(s,"    log_open();\n    pack_path = select_pack_path(argc, argv);",
+    s=once(s,"    log_open();\n",
            """    log_open();
     if(!ik_rc6_install_signal_handlers())
         log_printf("IKEXIT ERROR: no se instalaron todas las senales de cierre\\n");
     else
         log_printf("IKEXIT handlers=SIGTERM,SIGINT,SIGHUP,SIGQUIT\\n");
-    pack_path = select_pack_path(argc, argv);""","install before launching cores")
+""","install before launching cores")
     s=once(s,"    while (!g_shutdown_requested && !g_swap_failed) {",
            "    while (!g_shutdown_requested && !g_swap_failed && !ik_rc6_exit_signal) {",
            "exit loop")
