@@ -93,6 +93,42 @@ static void ik_f6_dispatch_mailbox() {
 }
 } // namespace
 extern "C" {
+/* QuickStart isolated SNES-only snapshot bridge.
+ * The stock Snes9x libretro serializer tests Settings.SuperGameBoy and
+ * otherwise saves ONLY the "SGB!" Game Boy blob (about 215 KiB), not
+ * the SPC700 RAM, DSP registers or N-SPC program. Never use that API for
+ * the firmware bootstrap cache. Temporarily select the normal SNES
+ * serializer while keeping the actual game mode unchanged afterwards.
+ * This interface is private to Ik Core; normal libretro saves still use GB.
+ */
+__attribute__((visibility("default")))
+size_t ikcore_spc_full_snapshot_size(void) {
+    const bool8 was_sgb = Settings.SuperGameBoy;
+    Settings.SuperGameBoy = FALSE;
+    const size_t n = S9xFreezeSize();
+    Settings.SuperGameBoy = was_sgb;
+    return n;
+}
+__attribute__((visibility("default")))
+bool ikcore_spc_full_snapshot_save(void *dst, size_t n) {
+    if (!dst || !n || !S9xSGBPerfAudioActive()) return false;
+    const bool8 was_sgb = Settings.SuperGameBoy;
+    Settings.SuperGameBoy = FALSE;
+    const bool ok = (S9xFreezeGameMem(static_cast<uint8_t*>(dst),
+                                      static_cast<uint32>(n)) == TRUE);
+    Settings.SuperGameBoy = was_sgb;
+    return ok;
+}
+__attribute__((visibility("default")))
+bool ikcore_spc_full_snapshot_restore(const void *src, size_t n) {
+    if (!src || !n) return false;
+    const bool8 was_sgb = Settings.SuperGameBoy;
+    Settings.SuperGameBoy = FALSE;
+    const bool ok = (S9xUnfreezeGameMem(static_cast<const uint8_t*>(src),
+                                        static_cast<uint32>(n)) == SUCCESS);
+    Settings.SuperGameBoy = was_sgb;
+    return ok;
+}
 __attribute__((visibility("default")))
 int ikcore_spc_boot_ready(void) {
     return S9xSGBPerfAudioActive() ? 1 : 0;
@@ -105,11 +141,14 @@ int ikcore_spc_cache_restore_activate(void) {
     if(!S9xSGBPerfAudioActive()) {
         S9xSGBEnterPerfDirectMode();
         S9xSGBPerfAudioEnable();
-        Settings.SGB_BIOSModeActive=FALSE;
-        Settings.SuperGameBoy=TRUE;
-        Settings.PAL=FALSE;
-        Settings.FrameTime=Settings.FrameTimeNTSC;
     }
+    /* The SNES snapshot was restored through the non-SGB serializer.
+     * Whether the transient PERF audio flag survived or was re-enabled,
+     * leave the core explicitly in audio-only (no second GB CPU) mode. */
+    Settings.SGB_BIOSModeActive=FALSE;
+    Settings.SuperGameBoy=TRUE;
+    Settings.PAL=FALSE;
+    Settings.FrameTime=Settings.FrameTimeNTSC;
     ik_f6_rd=ik_f6_len=ik_f6_echo_wait=0;
     ik_f6_await=ik_f6_idle_due=false;
     ik_f6_rx=ik_f6_sent=ik_f6_idle=ik_f6_ack=ik_f6_retries=0;
