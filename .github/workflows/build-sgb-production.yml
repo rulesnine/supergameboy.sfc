@@ -103,8 +103,8 @@ jobs:
           python3 ikcore-project/experimental/fase6/patch_sgb_prod_colors.py \
             /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'mgba_gb_colors_preset' /tmp/ikcore_fase5_mgba_frontend.c
-          grep -q 'var->value="2"' /tmp/ikcore_fase5_mgba_frontend.c
-          grep -q 'var->value="ON"' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'v->value = "2"' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'v->value = "ON"' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKSGB VISUAL SGB_pal=' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKF6 ALSA retry' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'SPC_nonzero' /tmp/ikcore_fase5_mgba_frontend.c
