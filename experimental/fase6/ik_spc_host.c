@@ -15,6 +15,118 @@
 #include <unistd.h>
 #include <stdarg.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <limits.h>
+#include <errno.h>
+/* The SGB firmware cache contains a user-owned machine state; never shipped. */
+#define IK_PROD_CACHE_DIR "/var/lib/hakchi/sgb-native-test/ikcore-sgb-prod-cache"
+#define IK_PROD_CACHE_MAGIC 0x53474250524f4402ULL
+#define IK_PROD_MAX_STATE (48u * 1024u * 1024u)
+#define IK_PROD_BORDER_PIXELS (256u * 224u)
+static uint16_t g_prod_boot_frame[IK_PROD_BORDER_PIXELS];
+static unsigned g_prod_boot_frames;
+static enum retro_pixel_format g_prod_boot_format = RETRO_PIXEL_FORMAT_RGB565;
+struct IkProdCacheHeader {
+    uint64_t magic, pack_fingerprint;
+    uint32_t serialized_bytes, border_valid;
+    uint32_t boot_frames, reserved;
+};
+static uint64_t ik_prod_hash_pack(const char *path) {
+    FILE *fp=fopen(path,"rb");
+    unsigned char data[8192];size_t n,j;
+    uint64_t h=14695981039346656037ULL;
+    if(!fp)return 0;
+    while((n=fread(data,1,sizeof data,fp))>0) {
+        for(j=0;j<n;j++) {h^=data[j];h*=1099511628211ULL;}
+    }
+    if(ferror(fp))h=0;
+    fclose(fp);
+    return h;
+}
+static void ik_prod_cache_path(char *out,size_t len,uint64_t hash) {
+    snprintf(out,len,IK_PROD_CACHE_DIR "/boot-%016llx.cache",
+             (unsigned long long)hash);
+}
+static int ik_prod_border_usable(const uint16_t *p) {
+    size_t k;unsigned changes=0; uint16_t first;
+    if(g_prod_boot_frames==0)return 0;
+    first=p[0];
+    /* Reject black/flat splash and boot screens. The user owns the actual
+     * firmware art. Only outer 48px/40px are presented; never game pixels. */
+    for(k=0;k<IK_PROD_BORDER_PIXELS;k+=47) {
+        unsigned y=(unsigned)(k/256),x=(unsigned)(k%256);
+        if(x>=48&&x<208&&y>=40&&y<184)continue;
+        if(p[k]!=first && ++changes>24) return 1;
+    }
+    return 0;
+}
+static int ik_prod_cache_load(IkF6SpcHost *h,uint64_t hash,
+                              size_t (*get_size)(void),
+                              bool (*restore)(const void *,size_t),
+                              int (*resume)(void),IkF6Log log) {
+    struct IkProdCacheHeader hdr;
+    char path[256];FILE *fp=NULL;uint8_t *buf=NULL;
+    size_t size;int ok=0;
+    if(!hash||!get_size||!restore||!resume)return 0;
+    ik_prod_cache_path(path,sizeof path,hash);
+    fp=fopen(path,"rb");if(!fp)return 0;
+    if(fread(&hdr,1,sizeof hdr,fp)!=sizeof hdr ||
+       hdr.magic!=IK_PROD_CACHE_MAGIC || hdr.pack_fingerprint!=hash ||
+       hdr.serialized_bytes<4096 || hdr.serialized_bytes>IK_PROD_MAX_STATE ||
+       hdr.serialized_bytes!=get_size() || hdr.border_valid>1)goto done;
+    size=hdr.serialized_bytes;
+    buf=(uint8_t*)malloc(size);if(!buf)goto done;
+    if(fread(buf,1,size,fp)!=size)goto done;
+    if(fread(h->original_border_rgb565,sizeof(uint16_t),
+             IK_PROD_BORDER_PIXELS,fp)!=IK_PROD_BORDER_PIXELS)goto done;
+    if(!restore(buf,size))goto done;
+    if(!resume())goto done;
+    h->original_border_valid=(int)hdr.border_valid;
+    h->boot_frames=hdr.boot_frames;
+    h->fastboot_cache_hit=1;
+    ok=1;
+    if(log)log("IKSPC FASTBOOT cache=HIT saved_boot_frames=%u border=%s\n",
+               h->boot_frames,h->original_border_valid?"BIOS_ORIGINAL":"UNVERIFIED");
+done:
+    free(buf);fclose(fp);
+    if(!ok && log)log("IKSPC FASTBOOT cache=MISSED_OR_INVALID; full firmware boot used\n");
+    return ok;
+}
+static void ik_prod_cache_save(IkF6SpcHost *h,uint64_t hash,
+                               size_t (*get_size)(void),
+                               bool (*save)(void *,size_t),IkF6Log log) {
+    struct IkProdCacheHeader hdr;char path[256],tmp[280];
+    uint8_t *buf=NULL;FILE *fp=NULL;
+    size_t size;
+    if(!hash||!get_size||!save)return;
+    size=get_size();
+    if(size<4096||size>IK_PROD_MAX_STATE)return;
+    buf=(uint8_t*)malloc(size);if(!buf)return;
+    if(!save(buf,size))goto done;
+    (void)mkdir(IK_PROD_CACHE_DIR,0700);
+    ik_prod_cache_path(path,sizeof path,hash);
+    snprintf(tmp,sizeof tmp,"%s.tmp-%ld",path,(long)getpid());
+    fp=fopen(tmp,"wb");if(!fp)goto done;
+    memset(&hdr,0,sizeof hdr);
+    hdr.magic=IK_PROD_CACHE_MAGIC;hdr.pack_fingerprint=hash;
+    hdr.serialized_bytes=(uint32_t)size;
+    hdr.border_valid=h->original_border_valid;
+    hdr.boot_frames=h->boot_frames;
+    if(fwrite(&hdr,1,sizeof hdr,fp)!=sizeof hdr ||
+       fwrite(buf,1,size,fp)!=size ||
+       fwrite(h->original_border_rgb565,sizeof(uint16_t),
+               IK_PROD_BORDER_PIXELS,fp)!=IK_PROD_BORDER_PIXELS ||
+       fflush(fp)!=0) {fclose(fp);fp=NULL;unlink(tmp);goto done;}
+    if(fclose(fp)!=0){fp=NULL;unlink(tmp);goto done;}
+    fp=NULL;
+    if(rename(tmp,path)!=0){unlink(tmp);goto done;}
+    if(log)log("IKSPC FASTBOOT cache=SAVED bytes=%lu border=%s\n",
+               (unsigned long)size,
+               h->original_border_valid?"BIOS_ORIGINAL":"UNVERIFIED");
+done:
+    if(fp){fclose(fp);unlink(tmp);}
+    free(buf);
+}
 
 static IkF6Log g_log;
 static const char *g_system_directory="/var/lib/hakchi/sgb-native-test";
@@ -47,7 +159,12 @@ static bool snes_environment(unsigned command,void *data) {
     case RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE:
         *(int*)data=3;return true;
     case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT:
-        return true; /* silent video callback ignores RGB format */
+        if ((*(enum retro_pixel_format*)data)==RETRO_PIXEL_FORMAT_RGB565) {
+            g_prod_boot_format=RETRO_PIXEL_FORMAT_RGB565;
+            return true;
+        }
+        /* 0RGB1555 is not RGB565: reject rather than corrupt colors. */
+        return false;
     case RETRO_ENVIRONMENT_SET_GEOMETRY:
     case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO:
         return true;
@@ -55,7 +172,14 @@ static bool snes_environment(unsigned command,void *data) {
     }
 }
 static void no_video(const void *p,unsigned w,unsigned h,size_t pitch)
-{ (void)p;(void)w;(void)h;(void)pitch; }
+{
+    unsigned y;const uint8_t *src=(const uint8_t*)p;
+    if(!p || w!=256 || h<224 || pitch<512 || pitch>8192)return;
+    for(y=0;y<224;y++)
+        memcpy(&g_prod_boot_frame[(size_t)y*256u],
+               src+(size_t)y*pitch,512);
+    ++g_prod_boot_frames;
+}
 static void no_audio(short l,short r) {(void)l;(void)r;}
 static size_t no_audio_batch(const short *p,size_t frames)
 {(void)p;return frames;}
@@ -79,6 +203,11 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     bool (*load_game)(const struct retro_game_info *);
     void (*run)(void);
     void (*set_port)(unsigned,unsigned);
+    size_t (*serialize_size)(void)=NULL;
+    bool (*serialize)(void *,size_t)=NULL;
+    bool (*unserialize)(const void *,size_t)=NULL;
+    int (*resume)(void)=NULL;
+    uint64_t pack_hash=0;
     struct retro_game_info game;
     unsigned i;
     if (!h || !so || !pack || !out_rate) return 0;
@@ -115,6 +244,10 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     SYM(h->frame,"ikcore_spc_frame");
     SYM(h->pull,"ikcore_spc_pull_stereo");
     SYM(h->pending,"ikcore_spc_pending_frames");
+    SYM(serialize_size,"retro_serialize_size");
+    SYM(serialize,"retro_serialize");
+    SYM(unserialize,"retro_unserialize");
+    SYM(resume,"ikcore_spc_cache_restore_activate");
 #undef SYM
     set_environment(snes_environment);
     set_video(no_video);
@@ -131,6 +264,11 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
         goto fail;
     }
     h->loaded=1;
+    g_prod_boot_frames=0;
+    memset(g_prod_boot_frame,0,sizeof g_prod_boot_frame);
+    pack_hash=ik_prod_hash_pack(pack);
+    if(ik_prod_cache_load(h,pack_hash,serialize_size,unserialize,resume,log))
+        goto boot_done;
     const double boot_start_time = (double)clock() / CLOCKS_PER_SEC;
     if(log) log("IKSPC original SGB firmware boot started (max 4800 frames)\n");
     for (i=0;i<4800;++i) {
@@ -140,18 +278,31 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
             log("IKSPC firmware boot frames=%u ready=%d\n",i+1u,h->boot_ready());
     }
     h->ready=h->boot_ready();
+    h->boot_frames=i;
     if(!h->ready) {
         if(log) log("IKSPC firmware boot incomplete: audio SNES disabled\n");
         goto fail;
     }
+    if (g_prod_boot_format==RETRO_PIXEL_FORMAT_RGB565 &&
+        ik_prod_border_usable(g_prod_boot_frame)) {
+        memcpy(h->original_border_rgb565,g_prod_boot_frame,
+               sizeof h->original_border_rgb565);
+        h->original_border_valid=1;
+        if(log)log("IKSGB BORDER source=BIOS_original pixels=256x224\n");
+    } else if(log) {
+        log("IKSGB BORDER source=FALLBACK (no usable RGB565 BIOS frame)\n");
+    }
+    ik_prod_cache_save(h,pack_hash,serialize_size,serialize,log);
+boot_done:
+    h->ready=h->boot_ready();
     if (!h->set_frame_fps(gb_fps)) {
         if(log) log("IKSPC ERROR: invalid GB fps=%f\n",gb_fps);
         goto fail;
     }
     if(log) log("IKSPC initialized=1 boot_frames=%u GB_fps=%.5f SPC_cycles_per_frame=%.2f SNES GB CPU STOPPED\n",
-                i, gb_fps, 1024000.0/gb_fps);
-    if(log) log("IKSPC boot_CPU_ms=%ld (CPU timing, not wall-clock)\n",
-                (long)(((double)clock()/CLOCKS_PER_SEC-boot_start_time)*1000.0));
+                h->boot_frames, gb_fps, 1024000.0/gb_fps);
+    if(log)log("IKSPC FASTBOOT hit=%d border_valid=%d\n",
+              h->fastboot_cache_hit,h->original_border_valid);
     return 1;
 fail:
     ik_f6_spc_stop(h);
