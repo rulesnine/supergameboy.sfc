@@ -123,7 +123,14 @@ jobs:
           python3 ikcore-project/experimental/fase6/patch_prod_loading_screen.py \
             /tmp/ikcore_fase5_mgba_frontend.c \
             ikcore-project/experimental/fase6/ik_prod_loading_screen.inc
+          python3 ikcore-project/experimental/fase6/patch_prod_persistence.py \
+            /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKSGB LOADING HANDOFF' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'IKSAVE SRAM SAVE' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'IKCSUSP2' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'ik_suspend_png_write' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'ik_suspend_maybe_restore' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'ik_prod_sram_flush' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_prod_show_loading();' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKSGB LOADING classification' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_prod_overlay_bios_border' /tmp/ikcore_fase5_mgba_frontend.c
@@ -357,10 +364,8 @@ jobs:
           cp dist/mgba_libretro.so stage/usr/lib/ikcore-sgb-quick/
           cp dist/ikcore_spc_libretro.so stage/usr/lib/ikcore-sgb-quick/
           cp dist/7zr stage/usr/lib/ikcore-sgb-quick/
-          sed -e 's@/usr/lib/ikcore-fase6/ikcore-fase6-n2@/usr/lib/ikcore-sgb-quick/ikcore-sgb-quick-n2@g' \
-              -e 's@/usr/lib/ikcore-fase6/7zr@/usr/lib/ikcore-sgb-quick/7zr@g' \
-              ikcore-project/experimental/fase6/ikcore-fase6-hybrid-launcher.sh \
-              > stage/bin/ikcore-sgb-quick
+          cp ikcore-project/experimental/fase6/ikcore-quick-launcher.sh \
+             stage/bin/ikcore-sgb-quick
           cp stage/bin/ikcore-sgb-quick stage/bin/ikcore-sgb-quick-7z
           cp p7zip/License.txt stage/LICENSE-7ZR.txt
           cp mgba/LICENSE stage/LICENSE-mGBA-MPL2.txt
@@ -399,7 +404,9 @@ jobs:
           LOADING: Game Boy pixel-art CARGANDO screen displayed immediately after EGL init; hides intermediary mGBA border until game PCT_TRN settles (30 frames) or fallback is due.
           GAME SGB: last PCT stable before handoff; otherwise 120-frame bounded fallback. DMG: original BIOS border after 2 frames. Neither guard suspends CPU or sound.
           NO GENERIC BORDER: mGBA initial CHR/map RAM is blank, source artwork never loaded; frontend applies user BIOS border or matte fallback until ROM PCT_TRN replaces it.
-          BOOT: experimental SNES/SPC full-state cache v4 keyed by complete SGBPACK1; initial boot remains uncached. Older GB-only cache untouched. Physical validation required. Never bundle BIOS/ROM in cache.
+          BOOT: experimental SNES/SPC full-state cache v4 keyed by complete SGBPACK1; initial boot remains uncached. Older GB-only cache untouched. Physical validation required.
+          SRAM: mGBA RETRO_MEMORY_SAVE_RAM, per-GB-ROM hash, autosave on change every 5 s and at exit. Existing #25 .srm may be imported read-only if CLV ID and size match.
+          SUSPENSION: Clover --save-on-quit, --load-state-file and --save-screenshot-on-quit. New IKCSUSP2 mGBA-specific state; old IKCSUSP1 remains protected (not compatible). Never bundle BIOS/ROM in cache.
           PLAY: no 120-second test exit, run until SELECT+START hold or Clover normal shutdown.
           VALIDATION: RC5 requires physical tests across GB non-SGB and games with authored SGB borders, palettes and sound; never claim full compatibility before evidence.
           SEPARATE MODULE: installs only /usr/lib/ikcore-sgb-quick and /bin/ikcore-sgb-quick*; stable #26, #43, F6 #40 unchanged.
