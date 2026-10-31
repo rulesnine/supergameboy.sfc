@@ -109,6 +109,7 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     SYM(run,"retro_run");
     SYM(h->boot_ready,"ikcore_spc_boot_ready");
     SYM(h->set_frame_fps,"ikcore_spc_set_frame_fps");
+    SYM(h->mailbox_stats,"ikcore_spc_mailbox_stats");
     SYM(h->send_sound,"ikcore_spc_send_sound");
     SYM(h->send_transfer,"ikcore_spc_send_sou_trn");
     SYM(h->frame,"ikcore_spc_frame");
