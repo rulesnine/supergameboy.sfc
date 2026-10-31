@@ -259,6 +259,10 @@ static void no_video(const void *p,unsigned w,unsigned h,size_t pitch)
         } else return;
     }
     ++g_prod_boot_frames;
+    /* Present the REAL firmware's SNES video, not fabricated Nintendo art.
+     * Throttled to one frame in 12 to protect the Cortex-A7 boot budget. */
+    if(g_prod_boot_video && (g_prod_boot_frames%12u)==0u)
+        g_prod_boot_video(g_prod_boot_frame,g_prod_boot_frames);
 }
 static void no_audio(short l,short r) {(void)l;(void)r;}
 static size_t no_audio_batch(const short *p,size_t frames)
