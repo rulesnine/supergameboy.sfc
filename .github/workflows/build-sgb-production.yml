@@ -1,4 +1,4 @@
-name: Ik Core SGB Production RC2 ARMv7 NES Mini
+name: Ik Core SGB Production RC3 ARMv7 NES Mini
 on:
   workflow_dispatch:
   push:
@@ -52,6 +52,8 @@ jobs:
             ik_sgb_bridge.c ik_sgb_mgba_telemetry.c \
             ../fase6/test_sgb_prod_visual.c -o /tmp/sgb-prod-visual-test
           /tmp/sgb-prod-visual-test
+          gcc -std=c11 -Wall -Wextra -Werror -O2 -I../fase6 ../fase6/test_prod_loading_gate.c -o /tmp/sgb-prod-loading-test
+          /tmp/sgb-prod-loading-test
           gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_bridge.c ik_sgb_mgba_telemetry.c ../fase6/test_sou_trn_capture.c -I. -o /tmp/fase6-sou
           /tmp/fase6-sou
           gcc -std=c11 -Wall -Wextra -Werror -O2 \
@@ -110,6 +112,12 @@ jobs:
             /tmp/ikcore_fase5_mgba_frontend.c
           python3 ikcore-project/experimental/fase6/patch_prod_no_timeout.py \
             /tmp/ikcore_fase5_mgba_frontend.c
+          python3 ikcore-project/experimental/fase6/patch_prod_loading_screen.py \
+            /tmp/ikcore_fase5_mgba_frontend.c \
+            ikcore-project/experimental/fase6/ik_prod_loading_screen.inc
+          grep -q 'IKSGB LOADING HANDOFF' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'ik_prod_show_loading();' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'IKSGB LOADING classification' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_prod_overlay_bios_border' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'while (!g_shutdown_requested && !g_swap_failed)' /tmp/ikcore_fase5_mgba_frontend.c
           ! grep -q 'timeout 120 s' /tmp/ikcore_fase5_mgba_frontend.c
@@ -372,6 +380,8 @@ jobs:
           If using a standalone GB ROM for SNES audio, the existing user-owned SGBPACK1 remains at /var/lib/hakchi/sgb-native-test/KOF96_SGBPACK_v1_REUPLOAD.sfc, or provide it as second CLI arg.
           SHARP PIXELS: nearest-neighbor hardware filtering, no interpolation enabled by Ik Core.
           FRAME: actual user-provided SGB1 BIOS RGB565 frame captured and persisted per firmware; game PCT_TRN overrides.
+          LOADING: Game Boy pixel-art CARGANDO screen displayed immediately after EGL init; hides intermediary mGBA border until game PCT_TRN settles (30 frames) or fallback is due.
+          GAME SGB: last PCT stable before handoff; otherwise 480-frame bounded fallback. DMG: direct default after 4 frames. Neither guard suspends CPU or sound.
           BOOT: verified Snes9x savestate cached locally keyed by firmware hash; first run can still cost full firmware boot; warm launches should be quicker. Never bundle BIOS/ROM in cache.
           PLAY: no 120-second test exit, run until SELECT+START hold or Clover normal shutdown.
           VALIDATION: RC2 requires physical tests across GB non-SGB and games with authored SGB borders, palettes and sound; never claim full compatibility before evidence.
@@ -386,15 +396,15 @@ jobs:
           grep -q 'ikcore-sgb-prod-n2' stage/bin/ikcore-sgb-prod
           test -x stage/usr/lib/ikcore-sgb-prod/7zr
           test ! -e stage/bin/ikcore-fase6-7z
-          tar -C stage -czf "IkCore-SGB-Production-RC2-$GITHUB_RUN_NUMBER.hmod" .
-          sha256sum "IkCore-SGB-Production-RC2-$GITHUB_RUN_NUMBER.hmod" > "IkCore-SGB-Production-RC2-$GITHUB_RUN_NUMBER.hmod.sha256"
+          tar -C stage -czf "IkCore-SGB-Production-RC3-$GITHUB_RUN_NUMBER.hmod" .
+          sha256sum "IkCore-SGB-Production-RC3-$GITHUB_RUN_NUMBER.hmod" > "IkCore-SGB-Production-RC3-$GITHUB_RUN_NUMBER.hmod.sha256"
       - name: Upload production candidate artifact
         uses: actions/upload-artifact@v4
         with:
-          name: IkCore-SGB-Production-RC2
+          name: IkCore-SGB-Production-RC3
           path: |
-            IkCore-SGB-Production-RC2-*.hmod
-            IkCore-SGB-Production-RC2-*.hmod.sha256
+            IkCore-SGB-Production-RC3-*.hmod
+            IkCore-SGB-Production-RC3-*.hmod.sha256
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 30
