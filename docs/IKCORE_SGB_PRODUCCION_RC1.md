@@ -55,3 +55,12 @@ Casos obligatorios en NES Mini para liberar final:
 4. **KOF '96**: sound mailbox sin fallas, `audio drop=0`, velocidad cercana a 59.73 FPS en NES Mini, sin regresión de la máquina de escribir.
 
 La instrumentación de comandos de borde NO prueba por sí sola fidelidad pixel por pixel ni cobertura de toda la biblioteca. De no haber pruebas físicas multisistema, etiquetar esta build RC1 y no versión final certificada.
+
+## Producción RC2 — tres correcciones solicitadas
+
+- **Eliminado cierre de test a los 120 segundos:** el bucle principal de producción ya no contiene condición de salida por tiempo. Solo salidas solicitadas (SELECT+START), de Clover/retro core o error grave de EGL.
+- **Marco BIOS original para juegos GB sin PCT_TRN:** en el arranque del firmware SGB1 que el usuario proporcionó, Snes9x captura una imagen SNES de 256×224 píxeles y la convierte a RGB565 (si el backend entrega RGB555). El front-end muestra únicamente sus márgenes SGB (x=0–47, 208–255, y=0–39,184–223); el área de juego 160×144 y los colores enviados por la ROM siguen inalterados. Si un juego envía su propio PCT_TRN, el marco de ese juego prevalece. Si el firmware no produce una captura verificable, se conserva el marco de mGBA y se registra FALLBACK; no reemplazarlo con arte inventado.
+- **Cache de arranque:** el estado de Snes9x tras inicializar N-SPC y el marco capturado se guardan de forma privada en la NES Mini, identificados por hash FNV64 de los bytes del SGBPACK1 original, bajo `/var/lib/hakchi/sgb-native-test/ikcore-sgb-prod-cache/`. Solo se reutiliza si coinciden hash, formato, firma, tamaño y se puede restaurar el save state. El primer inicio o uno con pack distinto aún deberá ejecutar el BIOS completo. No se incluye ni distribuye ninguna imagen de BIOS/ROM en el HMOD. Se registra `IKSPC FASTBOOT hit=... startup_ms=...`.
+- No se modificaron el core mGBA del juego, el mailbox SPC700 de #40, las paletas SGB ni el filtro GL_NEAREST; continúa aislado de la instalación Fase6 #40.
+
+**Validación necesaria en NES Mini**: (a) primera ejecución con firmware/pack actual y segunda (cache=HIT, startup_ms menor); (b) marco y paleta con un GB normal sin PCT_TRN y otro con PCT_TRN propio; (c) KOF96 y efectos de máquina de escribir; (d) continuar jugando más de dos minutos. Sin estas verificaciones, RC2 no debe anunciarse como producto final ni prometer 3 segundos en primera ejecución.
