@@ -44,3 +44,20 @@ Los criterios útiles son `IKSPC initialized=1`, `SOUND sent>0`, `SOU_TRN transf
 - Las transiciones de arranque del firmware siguen siendo de la ruta separada de audio, no se muestran en vídeo mGBA; la unificación visual SGBPACK1 completa queda pendiente.
 - La frecuencia SMP por frame proviene de #117 y puede necesitar ajustes finos para el ritmo de 59.73 FPS del Game Boy, sin modificar el reloj del juego.
 - Compatibilidad universal de GB/SGB exige más títulos de referencia y no se deduce de KOF '96.
+
+## Corrección después del primer lanzamiento fallido (compilación #15)
+
+En la consola se intentó `/bin/ikcore-fase6-hybrid "/ruta/KOF96.gb" ...`: `/ruta/KOF96.gb` era **texto de ejemplo**, no una ruta existente. El módulo #10a salió antes de inicializar cualquier motor (`runs=0`, `video frames=0`). No constituye un resultado de emulación ni una regresión de audio.
+
+El contenedor SGBPACK1 **ya incluye la ROM Game Boy**. Desde la compilación F6 **#15**, el lanzador acepta **un solo archivo**:
+
+```sh
+ls -lh /var/lib/hakchi/sgb-native-test/KOF96_SGBPACK_v1_REUPLOAD.sfc
+/bin/ikcore-fase6-hybrid "/var/lib/hakchi/sgb-native-test/KOF96_SGBPACK_v1_REUPLOAD.sfc"
+```
+
+Internamente el frontend valida magic/version/layout y CRC32 de las tres secciones y del conjunto, copia únicamente el contenido Game Boy en memoria y lo entrega al núcleo mGBA mediante el campo `retro_game_info.data`. La ruta SGBPACK1 original se utiliza también como fuente del firmware y del sonido SNES. **No crea ni distribuye una copia permanente de la ROM.** La ruta dual `.gb + .sfc` permanece soportada.
+
+Se añadieron `experimental/fase6/ik_sgbpack_rom.c` y pruebas de contenedor sintético con rechazo por CRC, aprobadas en GitHub Actions run `41172685411`. Esto valida compilación e integridad del parser, pero todavía **no** comprueba la inicialización de N-SPC en hardware.
+
+El ejecutable todavía incluye una línea heredada `core mode: mGBA ... no SNES SPC/DSP`, que describe solo el motor GB y no el backend separado. Para conocer el estado real del híbrido usar `IKSPC initialized` y `SNES_PCM_mixed`.
