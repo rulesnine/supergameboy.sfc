@@ -114,6 +114,10 @@ jobs:
           python3 ikcore-project/experimental/fase6/patch_snes9x_spc_exports.py \
             supersnes9x/libretro/libretro.cpp
           grep -q 'ikcore_spc_boot_ready' supersnes9x/libretro/libretro.cpp
+          # Snes9x's default version script exports only retro_* functions.
+          # Include our private bridge API in the experimental shared object.
+          sed -i 's/global: retro_\*;/global: retro_*; ikcore_spc_*;/' supersnes9x/libretro/link.T
+          grep -q 'ikcore_spc_\*' supersnes9x/libretro/link.T
           cd supersnes9x
           git diff --check
       - name: Cross-compile isolated Snes9x SPC700 DSP firmware core
