@@ -22,29 +22,42 @@ static const void *ik_prod_overlay_bios_border(const void *game,unsigned w,unsig
 {
     uint64_t pal=0,attrs=0,chr=0,pct=0,mask=0;
     unsigned y;
-    if(!game || w!=256 || h!=224 ||
-       !g_f6_ready || !g_f6_spc.original_border_valid ||
-       !ikcore_sgb_prod_visual_stats)
+    if(!game || w!=256 || h!=224)
         return game;
 
-    ikcore_sgb_prod_visual_stats(&pal,&attrs,&chr,&pct,&mask);
-    if(pct) return game; /* Original cart PCT always wins over BIOS bezel */
+    if(ikcore_sgb_prod_visual_stats)
+        ikcore_sgb_prod_visual_stats(&pal,&attrs,&chr,&pct,&mask);
+    if(pct) return game; /* Native cart PCT/CHR artwork has absolute priority. */
     memcpy(g_prod_border_comp,game,sizeof g_prod_border_comp);
 
-    /* RGB565 from SNES boot frame, stored without blending or color loss. */
-    for(y=0;y<224;y++) {
-        const uint16_t *source=&g_f6_spc.original_border_rgb565[y*256u];
-        uint16_t *dest=&g_prod_border_comp[y*256u];
-        if(y<40u || y>=184u)
-            memcpy(dest,source,256u*sizeof(uint16_t));
-        else {
-            memcpy(dest,source,48u*sizeof(uint16_t));
-            memcpy(dest+208u,source+208u,48u*sizeof(uint16_t));
+    /* Hard protection: NO intermediate mGBA frame is ever displayed.
+     * If SGB1 BIOS capture is available, show its original border;
+     * otherwise matte BLACK, never mGBA's decorative stock artwork.
+     * Keep every one of the 160x144 actual game pixels untouched. */
+    {
+        const int bios=g_f6_ready && g_f6_spc.original_border_valid;
+        for(y=0;y<224;y++) {
+            const uint16_t *source=&g_f6_spc.original_border_rgb565[y*256u];
+            uint16_t *dest=&g_prod_border_comp[y*256u];
+            if(y<40u || y>=184u) {
+                if(bios) memcpy(dest,source,256u*sizeof(uint16_t));
+                else memset(dest,0,256u*sizeof(uint16_t));
+            } else {
+                if(bios) {
+                    memcpy(dest,source,48u*sizeof(uint16_t));
+                    memcpy(dest+208u,source+208u,48u*sizeof(uint16_t));
+                } else {
+                    memset(dest,0,48u*sizeof(uint16_t));
+                    memset(dest+208u,0,48u*sizeof(uint16_t));
+                }
+            }
         }
-    }
-    if(!g_prod_border_logged) {
-        log_printf("IKSGB BORDER display=ORIGINAL_SGB_BIOS ROM_PCT=0 RGB565=1 game_area_unmodified=1\\n");
-        g_prod_border_logged=1;
+        if(!g_prod_border_logged) {
+            log_printf("IKSGB BORDER display=%s ROM_PCT=0 RGB565=1"
+                       " no_mgba_generic=1 game_area_unmodified=1\\n",
+                       bios?"ORIGINAL_SGB_BIOS":"MATTE_NO_GENERIC");
+            g_prod_border_logged=1;
+        }
     }
     return g_prod_border_comp;
 }
