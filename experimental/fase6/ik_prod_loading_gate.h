@@ -19,11 +19,12 @@ static inline int ik_prod_gate_frame(IkProdLoadingGate *g, uint32_t pct, int ful
     ++g->frames;
     if(pct != g->pct_last) {g->pct_last=pct;g->pct_quiet=0;}
     else if(g->pct_quiet<65535u)++g->pct_quiet;
-    /* Transfers need 5 frames; allow 30 for two halves and packet bursts. */
+    /* Keep 30 quiet frames after a PCT; only shorten the no-PCT guard.
+     * A PCT arriving near frame 120 must NOT be revealed prematurely. */
     if(full_sgb_frame && pct && g->pct_quiet>=30u)g->visible=1;
-    else if(!g->enhanced && g->frames>=4u)g->visible=1;
-    else if(g->enhanced && g->frames>=480u)g->visible=1;
-    else if(!full_sgb_frame && g->frames>=16u)g->visible=1;
+    else if(!g->enhanced && g->frames>=2u)g->visible=1;
+    else if(g->enhanced && g->frames>=120u && pct==0u)g->visible=1;
+    else if(!full_sgb_frame && g->frames>=8u)g->visible=1;
     return g->visible;
 }
 #endif
