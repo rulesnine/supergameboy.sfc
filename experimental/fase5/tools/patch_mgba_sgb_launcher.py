@@ -27,7 +27,7 @@ def patch(s):
         '        unsigned model=0,border=0,romsgb=0,w=0,h=0;\n'
         '        ikcore_fase5_sgb_status(&model,&border,&romsgb,&w,&h);\n'
         '        log_printf("IKSGB model=%u SGB=%u border=%u rom_sgb=%u geometry=%ux%u\\n",\n'
-        '                   model, (model & 2u) ? 1u : 0u, border, romsgb, w, h);\n'
+        '                   model, (model & 0x20u) ? 1u : 0u, border, romsgb, w, h);\n'
         '    }\n',
         'SGB on-load status')
     s=once(s,'log_printf("IK CORE FASE 5 mGBA ARMv7 BASELINE: NOT HYBRID, NO SNES SOUND\\n");',
