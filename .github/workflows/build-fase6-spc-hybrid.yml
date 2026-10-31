@@ -173,8 +173,11 @@ jobs:
         run: |
           set -eu
           python3 ikcore-project/tools/apply_sgbpack.py
+          python3 ikcore-project/experimental/fase6/patch_f6_spc_cadence.py supersnes9x
           python3 ikcore-project/experimental/fase6/patch_snes9x_spc_exports.py \
             supersnes9x/libretro/libretro.cpp
+          grep -q 'ikcore_spc_set_frame_fps' supersnes9x/libretro/libretro.cpp
+          grep -q 'ik_f6_cycles_per_gb_frame' supersnes9x/apu/apu.cpp
           grep -q 'ikcore_spc_boot_ready' supersnes9x/libretro/libretro.cpp
           # Snes9x's default version script exports only retro_* functions.
           # Include our private bridge API in the experimental shared object.
@@ -283,6 +286,7 @@ jobs:
           "$READELF" -Ws dist/mgba_libretro.so | grep -q 'ikcore_fase6_sou_trn_pop'
           "$READELF" -Ws dist/ikcore_spc_libretro.so | grep -q 'ikcore_spc_send_sound'
           "$READELF" -Ws dist/ikcore_spc_libretro.so | grep -q 'ikcore_spc_pull_stereo'
+          "$READELF" -Ws dist/ikcore_spc_libretro.so | grep -q 'ikcore_spc_set_frame_fps'
           sha256sum dist/* > dist/SHA256SUMS
       - name: Package independent F6 hybrid firmware HMOD
         run: |
