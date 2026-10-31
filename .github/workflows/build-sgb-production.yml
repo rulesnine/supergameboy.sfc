@@ -100,6 +100,11 @@ jobs:
             /tmp/ikcore_fase5_mgba_frontend.c
           python3 ikcore-project/experimental/fase6/patch_sgb_prod_visual_frontend.py \
             /tmp/ikcore_fase5_mgba_frontend.c
+          python3 ikcore-project/experimental/fase6/patch_sgb_prod_colors.py \
+            /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'mgba_gb_colors_preset' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'var->value="2"' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'var->value="ON"' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKSGB VISUAL SGB_pal=' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKF6 ALSA retry' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'SPC_nonzero' /tmp/ikcore_fase5_mgba_frontend.c
@@ -345,7 +350,7 @@ jobs:
           Ik Core SGB Production Candidate RC1 - Nintendo NES Mini ARMv7
           BASE: physically validated Ik Core Phase 6 #40; mGBA v0.10.5 + Snes9x #117 SPC700/DSP.
           GAME BOY SGB: preserves original game PAL/ATTR/CHR_TRN/PCT_TRN messages; game-authored border and palettes.
-          NORMAL GAME BOY: forces SGB-compatible model, mGBA original default SGB border remains when game has no custom PCT_TRN. No invented custom palette.
+          NORMAL GAME BOY: forces SGB-compatible model, keeps SGB default frame if no PCT_TRN, loads real SGB title-based palette presets (mGBA gb.colors=2) when known; otherwise original grayscale fallback.
           AUDIO: original SNES SGB mailbox / ACK #40 preserved. User-owned SGBPACK1 firmware needed for SGB SPC features; no commercial ROM/BIOS bundled.
           SUPPORT: .gb, .gbc, .dmg, .gb.7z, .gbc.7z, .sfc and .sfc.7z SGBPACK1. CGB-only games cannot run on original SGB; color-only mode unsupported in this profile.
           HAKCHI CE command: /bin/ikcore-sgb-prod-7z "/var/lib/hakchi/games/.storage/CLV-.../GAME.gb.7z"
