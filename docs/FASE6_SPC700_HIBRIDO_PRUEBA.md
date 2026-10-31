@@ -83,3 +83,18 @@ Registro real facilitado por el usuario:
 - Registrar \`IKF6 ARCHIVE source\` en el log nativo para identificar la ruta \`.sfc.7z\` original.
 
 El **único** siguiente test de campo de esta iteración debe hacerse con el juego previamente ubicado en \`/var/lib/hakchi/games/.storage/CLV-U-TQUUY/NETTOU_KOF_96_prueba_SGBPACK_v1.sfc.7z\`. El usuario ejecuta el emulador y luego un \`tail -n 80\` de log; no debe investigar el audio del sistema ni repetir comandos de diagnóstico específicos.
+
+## Prueba física Fase 6 #26 y corrección #33
+
+Registro de #26 desde Hakchi/Clover (120.01 segundos):
+- 7168 cuadros, **59.73 FPS**, capacidad **135.71 FPS**, `late frames=0`.
+- ALSA correcto: `audio write=3,843,412`, `audio drop=0`, `ALSA recover=0`.
+- SGB inicializado: `IKSPC initialized=1`, `SOUND received=187 sent=187`, `SPC_nonzero=1,583,624`, `SNES_PCM_mixed=3,887,791`.
+- `silent=32,593`: underruns del FIFO SPC. Concuerda aproximadamente con el desacople del reloj por cuadro SNES 60.0988 Hz frente a mGBA ~59.7275 Hz. El usuario observó sonido de máquina de escribir/texto entrecortado; la correlación no demuestra la causa completa.
+
+La compilación experimental **#33** (GitHub Actions run `41176717270` aprobado) incorpora:
+- Un parche aislado `experimental/fase6/patch_f6_spc_cadence.py` que hace avanzar los ciclos SPC700 a `1024000 / fps_gameboy` por cuadro en lugar de `1024000 / 60.09881389744051`; preserva reloj real de SPC y tono.
+- Exportación privada `ikcore_spc_set_frame_fps` y configuración a partir de `avinfo.timing.fps` del GB, sin modificar los ejecutables estables.
+- `IKSPC boot_CPU_ms` para observar coste de inicio de firmware original (no aceleración de boot demostrada).
+
+CI verificó ARMv7 hard float, ABI GLIBC <= 2.23, exportaciones SPC, extracción `.sfc.7z`, tar HMOD y SHA256. **Pendiente validación física** de mejora de la máquina de escribir y reducción de bajo flujo de PCM; no declarar audio fiel ni arranque acelerado todavía.
