@@ -71,7 +71,11 @@ static int ik_prod_cache_load(IkF6SpcHost *h,uint64_t hash,
     size_t size;int ok=0;
     if(!hash||!get_size||!restore||!resume)return 0;
     ik_prod_cache_path(path,sizeof path,hash);
-    fp=fopen(path,"rb");if(!fp)return 0;
+    fp=fopen(path,"rb");
+    if(!fp) {
+        if(log)log("IKSPC FASTBOOT cache=ABSENT errno=%d (pack-dependent cold boot)\\n",errno);
+        return 0;
+    }
     if(fread(&hdr,1,sizeof hdr,fp)!=sizeof hdr ||
        hdr.magic!=IK_PROD_CACHE_MAGIC || hdr.pack_fingerprint!=hash ||
        hdr.serialized_bytes<4096 || hdr.serialized_bytes>IK_PROD_MAX_STATE ||
