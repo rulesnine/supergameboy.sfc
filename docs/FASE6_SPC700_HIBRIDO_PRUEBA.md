@@ -61,3 +61,25 @@ Internamente el frontend valida magic/version/layout y CRC32 de las tres seccion
 Se añadieron `experimental/fase6/ik_sgbpack_rom.c` y pruebas de contenedor sintético con rechazo por CRC, aprobadas en GitHub Actions run `41172685411`. Esto valida compilación e integridad del parser, pero todavía **no** comprueba la inicialización de N-SPC en hardware.
 
 El ejecutable todavía incluye una línea heredada `core mode: mGBA ... no SNES SPC/DSP`, que describe solo el motor GB y no el backend separado. Para conocer el estado real del híbrido usar `IKSPC initialized` y `SNES_PCM_mixed`.
+
+
+## Prueba física de KOF '96 — HMOD #21 (120 segundos)
+
+Registro real facilitado por el usuario:
+- \`play avg: 59.73 FPS\`, 7168 cuadros, \`work cap: 126.53 FPS\`, \`late frames: 0\`, resolución 256×224: mantiene ritmo de vídeo sin perder frames.
+- \`IKSPC initialized=1\`: boot SGB firmware completado, backend N-SPC activo.
+- \`SOUND received=318 sent=318 undelivered=0\`: comandos de efecto recibidos por la interfaz SPC; **no prueba que se escucharon**.
+- \`SPC_frames=7140\`, \`FIFO=16384\` (capacidad): SPC tenía muestras acumuladas.
+- \`SNES_PCM_mixed=0 silent=0\`, \`audio gen=3934720 audio write=0 audio drop=3934720\`: **ruta de mezcla no ejecutada** y audio físico ausente.
+- Tres dispositivos ALSA dieron \`Device or resource busy\`; el host descartaba samples antes de entrar en el bucle de mezcla. \`recover=0\` no contradice esto porque nunca consiguió abrir un PCM.
+- La ruta del archivo comprimido original no se registraba en el log principal, por lo que este registro solo valida el SGBPACK1 de respaldo, no la procedencia del archivo \`.7z\`.
+
+### Corrección de software para #26 experimental
+
+- Mover \`ik_f6_spc_mix_one\` del escritor ALSA al callback de entrada mGBA (ANTES de comprobar \`g_alsa_ready\`), por lo que las muestras SNES se consumen y se mezclarán tanto con dispositivo ocupado como con dispositivo disponible. La condición \`audio write=0\` sigue reflejando honestamente el resultado físico si ALSA está ocupado.
+- Crear PCM SPC a 32768 Hz de entrada de mGBA, **no** a la frecuencia del hardware que puede ser 32040/32000/48000 (o quedar en valor por defecto si ALSA falló). La adaptación a la frecuencia ALSA sucede **después** de sumar GB+SPC, en un único resampler final.
+- Contar \`SPC_nonzero\` para comprobar si la salida N-SPC contiene alguna muestra distinta de cero. Aunque esté activo el backend, los comandos \`SOUND\` no garantizan contenido audible.
+- Probar apertura no exclusiva \`plug:dmix\` y \`dmix\` entre dispositivos y volver a intentar abrir ALSA solamente tres veces (GB frames 120,600,1800), sin matar servicios ni modificar Clover.
+- Registrar \`IKF6 ARCHIVE source\` en el log nativo para identificar la ruta \`.sfc.7z\` original.
+
+El **único** siguiente test de campo de esta iteración debe hacerse con el juego previamente ubicado en \`/var/lib/hakchi/games/.storage/CLV-U-TQUUY/NETTOU_KOF_96_prueba_SGBPACK_v1.sfc.7z\`. El usuario ejecuta el emulador y luego un \`tail -n 80\` de log; no debe investigar el audio del sistema ni repetir comandos de diagnóstico específicos.
