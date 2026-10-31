@@ -1,0 +1,268 @@
+name: Fase 6 mGBA plus SGB firmware N-SPC hybrid experimental
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - arquitectura/ikcore-mgba-spc-hibrido
+    paths:
+      - 'experimental/fase6/**'
+      - '.github/workflows/build-fase6-spc-hybrid.yml'
+permissions:
+  contents: read
+jobs:
+  hybrid-spc-armv7:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Ik Core experimental branch
+        uses: actions/checkout@v4
+        with:
+          path: ikcore-project
+      - name: Checkout pinned mGBA 0.10.5
+        uses: actions/checkout@v4
+        with:
+          repository: mgba-emu/mgba
+          ref: 0.10.5
+          submodules: true
+          path: mgba
+      - name: Checkout Snes9x #117 N-SPC firmware engine
+        uses: actions/checkout@v4
+        with:
+          repository: shanytc/snes9x
+          ref: 183e03e5efed3b6d450385c98e2ccffb194153c3
+          path: supersnes9x
+      - name: Test packet tap and dedicated launcher patch
+        run: |
+          set -eu
+          cd ikcore-project/experimental/fase5
+          gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_bridge.c test_ik_sgb_bridge.c -o /tmp/fase5-bridge
+          /tmp/fase5-bridge
+          gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_bridge.c ik_sgb_mgba_tap.c test_ik_sgb_mgba_tap.c -o /tmp/fase5-tap
+          /tmp/fase5-tap
+          gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_bridge.c ik_sgb_mgba_telemetry.c test_ik_sgb_mgba_relay.c -o /tmp/fase5-relay
+          /tmp/fase5-relay
+          gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_spc_route.c test_ik_sgb_spc_route.c -o /tmp/fase5-spc-route
+          /tmp/fase5-spc-route
+          gcc -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O2 -fsyntax-only \
+            -I"$GITHUB_WORKSPACE/supersnes9x/libretro" \
+            -I"$GITHUB_WORKSPACE/ikcore-project/experimental/fase6" \
+            "$GITHUB_WORKSPACE/ikcore-project/experimental/fase6/ik_spc_host.c"
+          gcc -std=c11 -Wall -Wextra -Werror -O2 ik_audio_rate_adapter.c test_ik_audio_rate_adapter.c -o /tmp/fase5-audio-rate
+          /tmp/fase5-audio-rate
+          python3 tools/test_mgba_patch.py
+          python3 tools/test_sgb_border_patch.py
+          g++ -std=c++17 -Wall -Wextra -Werror -O2 -I"$GITHUB_WORKSPACE/supersnes9x/sgb" \
+            "$GITHUB_WORKSPACE/supersnes9x/sgb/sgb_packet.cpp" \
+            "$GITHUB_WORKSPACE/ikcore-project/experimental/fase5/test_snes9x_raw_packet.cpp" \
+            -o /tmp/fase5-sgb-raw
+          /tmp/fase5-sgb-raw
+          python3 tools/patch_snes9x_icd2_inject.py "$GITHUB_WORKSPACE/supersnes9x"
+          grep -q 'S9xSGBInjectRawMGBAPacket' "$GITHUB_WORKSPACE/supersnes9x/sgb/sgb.cpp"
+          cd "$GITHUB_WORKSPACE"
+          python3 ikcore-project/experimental/fase5/tools/patch_mgba_sgb_packet_tap.py mgba/src/gb/io.c
+          python3 ikcore-project/experimental/fase5/tools/patch_mgba_sgb_force_model.py mgba/src/gb/core.c
+          python3 ikcore-project/experimental/fase5/tools/patch_mgba_sgb_default_border.py mgba/src/gb/video.c
+          python3 ikcore-project/experimental/fase5/tools/patch_mgba_sgb_diagnostics.py mgba/src/platform/libretro/libretro.c
+          grep -q 'GBValidModels(gb->memory.rom) & GB_MODEL_MGB' mgba/src/gb/core.c
+          grep -q 'enableSGBBorder(video->renderer, true)' mgba/src/gb/video.c
+          grep -q 'ikcore_fase5_sgb_status' mgba/src/platform/libretro/libretro.c
+          grep -q 'ikcore_mgba_sgb_packet(gb->sgbPacket' mgba/src/gb/io.c
+          python3 ikcore-project/experimental/fase5/tools/prepare_mgba_physical.py \
+            ikcore-project/native_n2/sgbpack_native_n2.c /tmp/ikcore_fase5_mgba_frontend.c
+          python3 ikcore-project/experimental/fase5/tools/patch_mgba_alsa_resample.py \
+            /tmp/ikcore_fase5_mgba_frontend.c
+          python3 ikcore-project/experimental/fase5/tools/patch_mgba_sgb_launcher.py \
+            /tmp/ikcore_fase5_mgba_frontend.c
+          python3 ikcore-project/experimental/fase6/patch_mgba_f6_hybrid.py \
+            /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'ik_f6_spc_start' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'ik_audio_rate_convert' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'plughw:0,0' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q '/usr/lib/ikcore-fase6/mgba_libretro.so' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'IKMGBA SGB packets' /tmp/ikcore_fase5_mgba_frontend.c
+      - name: Install cross-compiler and verification tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y file dpkg-dev bc cmake make
+      - name: Checkout known Linaro GCC ARMhf toolchain
+        uses: actions/checkout@v4
+        with:
+          repository: MayuriLabs/linaro_arm-linux-gnueabihf-7.5
+          ref: master
+          path: toolchain
+          fetch-depth: 1
+      - name: Xenial ARMhf GLIBC 2.23 sysroot
+        run: |
+          set -eu
+          mkdir -p xenial-debs xenial-sysroot
+          docker run --rm -v "$GITHUB_WORKSPACE/xenial-debs:/out" ubuntu:16.04 bash -ec '
+            printf "%s\n" \
+              "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial main universe" \
+              "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial-updates main universe" \
+              "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports xenial-security main universe" \
+              > /etc/apt/sources.list
+            apt-get update
+            cd /out
+            apt-get download libc6:armhf libc6-dev:armhf linux-libc-dev:armhf
+          '
+          for pkg in xenial-debs/*.deb; do dpkg-deb -x "$pkg" xenial-sysroot; done
+          test -e xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6
+          strings xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6 | grep -q GLIBC_2.23
+      - name: Apply original Ik Core SGBPACK1 #117 firmware/audio modifications
+        run: |
+          set -eu
+          python3 ikcore-project/tools/apply_sgbpack.py
+          python3 ikcore-project/experimental/fase6/patch_snes9x_spc_exports.py \
+            supersnes9x/libretro/libretro.cpp
+          grep -q 'ikcore_spc_boot_ready' supersnes9x/libretro/libretro.cpp
+          cd supersnes9x
+          git diff --check
+      - name: Cross-compile isolated Snes9x SPC700 DSP firmware core
+        working-directory: supersnes9x/libretro
+        run: |
+          set -eu
+          mkdir -p "$GITHUB_WORKSPACE/wrappers"
+          cat > "$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc" <<'EOF'
+          #!/bin/sh
+          exec "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc" --sysroot="$GITHUB_WORKSPACE/xenial-sysroot" "$@"
+          EOF
+          cat > "$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++" <<'EOF'
+          #!/bin/sh
+          exec "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-g++" --sysroot="$GITHUB_WORKSPACE/xenial-sysroot" -std=gnu++17 "$@"
+          EOF
+          chmod +x "$GITHUB_WORKSPACE/wrappers/"*
+          make clean || true
+          make -j2 \
+            platform=classic_armv7_a7 \
+            CC="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-gcc" \
+            CXX="$GITHUB_WORKSPACE/wrappers/arm-linux-gnueabihf-g++ -fno-threadsafe-statics -fno-semantic-interposition -pthread" \
+            AR="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar" \
+            STRIP="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-strip" \
+            HAVE_UNZIP=0 \
+            CPPFLAGS="-DSGBPACK_LITE -DIKCORE_GB_FAST_IDLE -DIKCORE_PPU_IDLE_FAST -DIKCORE_MBC5_FAST -DIKCORE_FIXED_ACID_KNOBS -DIKCORE_SGB_PERF_PPU -DIKCORE_SGB_HYBRID_AUDIO -DIKCORE_SGB_LAZY_APU -DIKCORE_SGB_PERF_AUDIO_RATE_LOCK" \
+            LDFLAGS="-flto=4 -pthread -static-libgcc -static-libstdc++" \
+            LIBS="$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6"
+          test -s supersnes9x_libretro.so
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp supersnes9x_libretro.so "$GITHUB_WORKSPACE/dist/ikcore_spc_libretro.so"
+          "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf" -Ws \
+            "$GITHUB_WORKSPACE/dist/ikcore_spc_libretro.so" | grep -q 'ikcore_spc_boot_ready'
+      - name: Link mGBA packet telemetry into an actual Game Boy core
+        run: |
+          set -eu
+          printf '\ntarget_sources(mgba_libretro PRIVATE "%s")\n' \
+             "$GITHUB_WORKSPACE/ikcore-project/experimental/fase5/ik_sgb_mgba_telemetry.c" \
+             >> mgba/CMakeLists.txt
+          printf 'target_sources(mgba_libretro PRIVATE "%s")\n' \
+             "$GITHUB_WORKSPACE/ikcore-project/experimental/fase5/ik_sgb_bridge.c" \
+             >> mgba/CMakeLists.txt
+          # mGBA sets M_LIBRARY=m in normal variable scope; -DM_LIBRARY cache is ignored.
+          # Force PIC-safe dynamic libm from the NES Mini-compatible Xenial sysroot.
+          sed -i "s|set(M_LIBRARY m)|set(M_LIBRARY \"$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6\")|" mgba/CMakeLists.txt
+          grep -q 'libm.so.6' mgba/CMakeLists.txt
+          cmake -S mgba -B mgba-build \
+            -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=arm \
+            -DCMAKE_C_COMPILER="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc" \
+            -DCMAKE_CXX_COMPILER="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-g++" \
+            -DCMAKE_SYSROOT="$GITHUB_WORKSPACE/xenial-sysroot" \
+            -DCMAKE_CXX_COMPILER_WORKS=TRUE \
+            -DCMAKE_EXE_LINKER_FLAGS="-lm" \
+            -DCMAKE_C_FLAGS="-O3 -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -fPIC" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-rpath-link,$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf" \
+            -DM_LIBRARY="$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6" \
+            -DM_CORE_GBA=ON -DM_CORE_GB=ON \
+            -DBUILD_LIBRETRO=ON -DBUILD_SHARED=OFF -DBUILD_STATIC=OFF \
+            -DBUILD_SDL=OFF -DBUILD_QT=OFF -DBUILD_GL=OFF -DBUILD_GLES2=OFF \
+            -DBUILD_GLES3=OFF -DDISABLE_DEPS=ON -DBUILD_TEST=OFF \
+            -DBUILD_LTO=OFF
+          cmake --build mgba-build --target mgba_libretro -- -j2
+          test -s mgba-build/mgba_libretro.so
+          file mgba-build/mgba_libretro.so
+      - name: Compile isolated EGL+ALSA launcher
+        run: |
+          set -eu
+          mkdir -p dist
+          sed -i "s/__IKCORE_RUN_NUMBER__/$GITHUB_RUN_NUMBER/g" /tmp/ikcore_fase5_mgba_frontend.c
+          "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc" \
+            --sysroot="$GITHUB_WORKSPACE/xenial-sysroot" \
+            -std=gnu11 -O3 -pipe -march=armv7-a -mtune=cortex-a7 \
+            -mfpu=neon-vfpv4 -mfloat-abi=hard -D_FILE_OFFSET_BITS=64 \
+            -I"$GITHUB_WORKSPACE/supersnes9x/libretro" \
+            -I"$GITHUB_WORKSPACE/ikcore-project/experimental/fase5" \
+            -I"$GITHUB_WORKSPACE/ikcore-project/experimental/fase6" \
+            /tmp/ikcore_fase5_mgba_frontend.c \
+            "$GITHUB_WORKSPACE/ikcore-project/experimental/fase5/ik_audio_rate_adapter.c" \
+            "$GITHUB_WORKSPACE/ikcore-project/experimental/fase5/ik_sgb_spc_route.c" \
+            "$GITHUB_WORKSPACE/ikcore-project/experimental/fase6/ik_spc_host.c" \
+            -o dist/ikcore-fase5-mgba-n2 \
+            -Wl,-rpath-link,"$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf" \
+            "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libdl.so.2"
+          cp mgba-build/mgba_libretro.so dist/mgba_libretro.so
+      - name: Verify ARM hard-float compatibility
+        run: |
+          set -eu
+          READELF="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf"
+          for bin in dist/mgba_libretro.so dist/ikcore-fase5-mgba-n2 dist/ikcore_spc_libretro.so; do
+            file "$bin" | grep -q 'ELF 32-bit'
+            "$READELF" -h "$bin" | grep -q 'Machine:.*ARM'
+            "$READELF" -h "$bin" | grep -q 'hard-float ABI'
+            if "$READELF" -V "$bin" | grep -Eq 'GLIBC_2\.(2[4-9]|[3-9][0-9])'; then
+              echo "ERROR: newer GLIBC than 2.23 in $bin"; exit 1
+            fi
+          done
+          "$READELF" -Ws dist/mgba_libretro.so | grep -q 'ikcore_fase5_stats'
+          "$READELF" -Ws dist/mgba_libretro.so | grep -q 'ikcore_fase5_sgb_status'
+          "$READELF" -Ws dist/mgba_libretro.so | grep -q 'ikcore_fase5_sgb_pop_packet'
+          "$READELF" -Ws dist/ikcore_spc_libretro.so | grep -q 'ikcore_spc_send_sound'
+          "$READELF" -Ws dist/ikcore_spc_libretro.so | grep -q 'ikcore_spc_pull_stereo'
+          sha256sum dist/* > dist/SHA256SUMS
+      - name: Package independent F6 hybrid firmware HMOD
+        run: |
+          set -eu
+          mkdir -p stage/bin stage/usr/lib/ikcore-fase6
+          cp dist/ikcore-fase5-mgba-n2 stage/usr/lib/ikcore-fase6/ikcore-fase6-n2
+          cp dist/mgba_libretro.so stage/usr/lib/ikcore-fase6/
+          cp dist/ikcore_spc_libretro.so stage/usr/lib/ikcore-fase6/
+          cat > stage/bin/ikcore-fase6-hybrid <<'EOF'
+          #!/bin/sh
+          exec /usr/lib/ikcore-fase6/ikcore-fase6-n2 "$@"
+          EOF
+          cat > stage/install <<'EOF'
+          #!/bin/sh
+          mkdir -p "$rootfs/usr/lib/ikcore-fase6"
+          copy "./usr/lib/ikcore-fase6/ikcore-fase6-n2" "$rootfs/usr/lib/ikcore-fase6/ikcore-fase6-n2"
+          copy "./usr/lib/ikcore-fase6/mgba_libretro.so" "$rootfs/usr/lib/ikcore-fase6/mgba_libretro.so"
+          copy "./usr/lib/ikcore-fase6/ikcore_spc_libretro.so" "$rootfs/usr/lib/ikcore-fase6/ikcore_spc_libretro.so"
+          copy "./bin/ikcore-fase6-hybrid" "$rootfs/bin/ikcore-fase6-hybrid"
+          chmod +x "$rootfs/bin/ikcore-fase6-hybrid" "$rootfs/usr/lib/ikcore-fase6/ikcore-fase6-n2"
+          EOF
+          cat > stage/uninstall <<'EOF'
+          #!/bin/sh
+          rm -f "$rootfs/bin/ikcore-fase6-hybrid"
+          rm -f "$rootfs/usr/lib/ikcore-fase6/ikcore-fase6-n2"
+          rm -f "$rootfs/usr/lib/ikcore-fase6/mgba_libretro.so" "$rootfs/usr/lib/ikcore-fase6/ikcore_spc_libretro.so"
+          rmdir "$rootfs/usr/lib/ikcore-fase6" 2>/dev/null || true
+          EOF
+          chmod 755 stage/install stage/uninstall stage/bin/ikcore-fase6-hybrid stage/usr/lib/ikcore-fase6/ikcore-fase6-n2
+          printf '%s\n' \
+            'Fase 6 EXPERIMENTAL: mGBA GB CPU/PPU/APU + separate original Ik Core #117 SGB N-SPC audio' \
+            'No firmware, BIOS or commercial ROM is bundled. Supply both matching files.' \
+            'Run: /bin/ikcore-fase6-hybrid /path/KOF96.gb /path/KOF96_SGBPACK.sfc' \
+            'Fallback SGBPACK: /var/lib/hakchi/sgb-native-test/KOF96_SGBPACK_v1_REUPLOAD.sfc' \
+            'Snes9x BIOS bootstrap may take hundreds/thousands of emulated frames.' \
+            'If SPC boot fails, fallback is GB-only audio; see IKSPC diagnostics.' \
+            'SOU_TRN 4KiB LCD capture remains TODO, SNES SFX fidelity NOT VALIDATED.' \
+            'Never overwrites stable Ik Core #43, #26 or /bin/sgbpack-native.' \
+            'Log: /var/lib/hakchi/sgb-native-test/ikcore-fase6-hybrid-*.log' \
+            > stage/README.txt
+          tar -C stage -czf "IkCore-Fase6-HYBRID-EXPERIMENTAL-$GITHUB_RUN_NUMBER.hmod" .
+          sha256sum "IkCore-Fase6-HYBRID-EXPERIMENTAL-$GITHUB_RUN_NUMBER.hmod" > "IkCore-Fase6-HYBRID-EXPERIMENTAL-$GITHUB_RUN_NUMBER.hmod.sha256"
+      - name: Upload diagnostic artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IkCore-Fase6-HYBRID-SPC-EXPERIMENTAL
+          path: |
+            IkCore-Fase6-HYBRID-EXPERIMENTAL-*.hmod
+            IkCore-Fase6-HYBRID-EXPERIMENTAL-*.hmod.sha256
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
