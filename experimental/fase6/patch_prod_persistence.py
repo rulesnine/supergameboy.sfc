@@ -101,7 +101,9 @@ def patch(src):
         '''static void (*core_retro_run)(void);
 static size_t (*core_retro_serialize_size)(void);
 static bool (*core_retro_serialize)(void *,size_t);
-static bool (*core_retro_unserialize)(const void *,size_t);''',"declare state exports")
+static bool (*core_retro_unserialize)(const void *,size_t);
+static void *(*core_retro_get_memory_data)(unsigned);
+static size_t (*core_retro_get_memory_size)(unsigned);''',"declare state exports")
     s=once(s,'    LOAD_CORE(retro_run);',
         '''    LOAD_CORE(retro_run);
     LOAD_CORE(retro_serialize_size);
@@ -110,6 +112,8 @@ static bool (*core_retro_unserialize)(const void *,size_t);''',"declare state ex
     LOAD_CORE(retro_get_memory_data);
     LOAD_CORE(retro_get_memory_size);''',"load state/ram exports")
     sram=(root/"experimental/fase6/ik_prod_sram.inc").read_text()
+    sram=once(sram,"static void *(*core_retro_get_memory_data)(unsigned);\n","","SRAM pointer duplicate")
+    sram=once(sram,"static size_t (*core_retro_get_memory_size)(unsigned);\n","","SRAM size pointer duplicate")
     suspend=adapted_suspend()
     start=suspend.index("static const void *ik_suspend_last_frame = NULL;")
     finish=suspend.index("\nstatic void ik_susp_le32",start)
