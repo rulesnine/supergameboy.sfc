@@ -126,6 +126,7 @@ jobs:
             ikcore-project/experimental/fase6/ik_prod_loading_screen.inc
           python3 ikcore-project/experimental/fase6/patch_prod_persistence.py \
             /tmp/ikcore_fase5_mgba_frontend.c
+          set -x  # show exactly which post-patch source assertion fails
           grep -q 'IKSGB LOADING HANDOFF' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKSAVE SRAM SAVE' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKCSUSP2' /tmp/ikcore_fase5_mgba_frontend.c
