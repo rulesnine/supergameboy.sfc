@@ -85,6 +85,8 @@ jobs:
             -DCMAKE_C_COMPILER="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc" \
             -DCMAKE_CXX_COMPILER="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-g++" \
             -DCMAKE_SYSROOT="$GITHUB_WORKSPACE/xenial-sysroot" \
+            -DCMAKE_CXX_COMPILER_WORKS=TRUE \
+            -DCMAKE_EXE_LINKER_FLAGS="-lm" \
             -DCMAKE_C_FLAGS="-O3 -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -fPIC" \
             -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-rpath-link,$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf" \
             -DM_CORE_GBA=OFF -DM_CORE_GB=ON \
