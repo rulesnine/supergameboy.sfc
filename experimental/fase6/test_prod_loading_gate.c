@@ -1,0 +1,30 @@
+#include "ik_prod_loading_gate.h"
+#include <assert.h>
+#include <stdio.h>
+int main(void) {
+    IkProdLoadingGate g;
+    unsigned i;
+    ik_prod_gate_init(&g,1);
+    for(i=0;i<100;i++)assert(!ik_prod_gate_frame(&g,0,1));
+    /* PCT transfer in SGB game: keep splash while mGBA copies CHR/PCT. */
+    assert(!ik_prod_gate_frame(&g,1,1));
+    for(i=0;i<29;i++)assert(!ik_prod_gate_frame(&g,1,1));
+    assert(ik_prod_gate_frame(&g,1,1));
+    for(i=0;i<100;i++)assert(ik_prod_gate_frame(&g,1,1));
+    ik_prod_gate_init(&g,0);
+    for(i=0;i<3;i++)assert(!ik_prod_gate_frame(&g,0,1));
+    assert(ik_prod_gate_frame(&g,0,1));
+    ik_prod_gate_init(&g,1);
+    for(i=0;i<479;i++)assert(!ik_prod_gate_frame(&g,0,1));
+    assert(ik_prod_gate_frame(&g,0,1));
+    ik_prod_gate_init(&g,1);
+    for(i=0;i<15;i++)assert(!ik_prod_gate_frame(&g,0,0));
+    assert(ik_prod_gate_frame(&g,0,0));
+    ik_prod_gate_init(&g,1);
+    assert(!ik_prod_gate_frame(&g,1,1));
+    for(i=0;i<10;i++)assert(!ik_prod_gate_frame(&g,1,1));
+    assert(!ik_prod_gate_frame(&g,2,1));
+    for(i=0;i<30;i++)assert(ik_prod_gate_frame(&g,2,1)==(i==29));
+    puts("PASS: clean SGB border handoff, DMG default, delayed PCT and bounded fallback");
+    return 0;
+}
