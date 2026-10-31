@@ -193,6 +193,10 @@ static void (*g_prod_boot_progress)(unsigned);
 static void (*g_prod_boot_video)(const uint16_t *,unsigned);
 static size_t (*g_prod_boot_audio)(const int16_t *,size_t);
 static unsigned long g_boot_pcm_frames;
+static int (*g_prod_boot_cancel)(void);
+void ik_f6_spc_set_boot_cancel(int (*callback)(void)) {
+    g_prod_boot_cancel=callback;
+}
 void ik_f6_spc_set_boot_audio(size_t (*callback)(const int16_t *,size_t)) {
     g_prod_boot_audio=callback;
 }
@@ -395,6 +399,10 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     g_boot_pcm_frames=0u;
     if(log) log("IKSPC original SGB firmware boot started (max 4800 frames)\n");
     for (i=0;i<4800;++i) {
+        if(g_prod_boot_cancel && g_prod_boot_cancel()) {
+            if(log) log("IKSPC BOOT ABORT: Clover exit requested at frame=%u\n",i);
+            goto fail;
+        }
         if(h->boot_ready()) break;
         run();
         if(g_prod_boot_progress && (i % 120u)==119u)
@@ -434,8 +442,14 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
         log("IKSGB BORDER source=FALLBACK (stock BIOS frame not safely captured)\n");
     }
     ik_prod_cache_save(h,pack_hash,serialize_size,serialize,log);
-    if(log)log("IKSPC BOOT AV: SNES_video_frames=%u SNES_PCM_frames=%lu cold=1\n",
-               g_prod_boot_frames,g_boot_pcm_frames);
+    if(log) {
+        clock_gettime(CLOCK_MONOTONIC,&boot_end_wall);
+        double seconds=(double)(boot_end_wall.tv_sec-boot_start_wall.tv_sec)+
+            (double)(boot_end_wall.tv_nsec-boot_start_wall.tv_nsec)*1.0e-9;
+        log("IKSPC BOOT AV: SNES_video_frames=%u SNES_PCM_frames=%lu measured_fps=%.2f target_fps=60.0 cold=1\n",
+            g_prod_boot_frames,g_boot_pcm_frames,
+            seconds>0.0?(double)i/seconds:0.0);
+    }
 boot_done:
     h->ready=h->boot_ready();
     if (!h->set_frame_fps(gb_fps)) {
