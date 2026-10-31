@@ -213,6 +213,11 @@ void ik_f6_spc_frame(IkF6SpcHost *h) {
         n=avail>1024?1024:avail;
         n=h->pull(p,n);
         if(n<=0) break;
+        {
+            int j;
+            for(j=0;j<n*2;j++)
+                if(p[j]!=0) ++h->spc_nonzero;
+        }
         resample_push(h,p,n);
         avail=h->pending();
     }
