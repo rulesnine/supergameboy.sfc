@@ -40,6 +40,8 @@ jobs:
           /tmp/fase5-tap
           gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_bridge.c ik_sgb_mgba_telemetry.c test_ik_sgb_mgba_relay.c -o /tmp/fase5-relay
           /tmp/fase5-relay
+          gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_bridge.c ik_sgb_mgba_telemetry.c ../fase6/test_sou_trn_capture.c -I. -o /tmp/fase6-sou
+          /tmp/fase6-sou
           gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_spc_route.c test_ik_sgb_spc_route.c -o /tmp/fase5-spc-route
           /tmp/fase5-spc-route
           gcc -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O2 -fsyntax-only \
@@ -62,6 +64,8 @@ jobs:
           python3 ikcore-project/experimental/fase5/tools/patch_mgba_sgb_force_model.py mgba/src/gb/core.c
           python3 ikcore-project/experimental/fase5/tools/patch_mgba_sgb_default_border.py mgba/src/gb/video.c
           python3 ikcore-project/experimental/fase5/tools/patch_mgba_sgb_diagnostics.py mgba/src/platform/libretro/libretro.c
+          python3 ikcore-project/experimental/fase6/patch_mgba_sou_trn.py mgba/src/gb/renderers/software.c
+          grep -q 'ikcore_mgba_sou_trn_scanline' mgba/src/gb/renderers/software.c
           grep -q 'GBValidModels(gb->memory.rom) & GB_MODEL_MGB' mgba/src/gb/core.c
           grep -q 'enableSGBBorder(video->renderer, true)' mgba/src/gb/video.c
           grep -q 'ikcore_fase5_sgb_status' mgba/src/platform/libretro/libretro.c
@@ -216,6 +220,7 @@ jobs:
           "$READELF" -Ws dist/mgba_libretro.so | grep -q 'ikcore_fase5_stats'
           "$READELF" -Ws dist/mgba_libretro.so | grep -q 'ikcore_fase5_sgb_status'
           "$READELF" -Ws dist/mgba_libretro.so | grep -q 'ikcore_fase5_sgb_pop_packet'
+          "$READELF" -Ws dist/mgba_libretro.so | grep -q 'ikcore_fase6_sou_trn_pop'
           "$READELF" -Ws dist/ikcore_spc_libretro.so | grep -q 'ikcore_spc_send_sound'
           "$READELF" -Ws dist/ikcore_spc_libretro.so | grep -q 'ikcore_spc_pull_stereo'
           sha256sum dist/* > dist/SHA256SUMS
