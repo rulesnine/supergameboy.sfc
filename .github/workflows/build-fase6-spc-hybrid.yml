@@ -91,7 +91,12 @@ jobs:
             /tmp/ikcore_fase5_mgba_frontend.c
           python3 ikcore-project/experimental/fase6/patch_f6_sgbpack_single_file.py \
             /tmp/ikcore_fase5_mgba_frontend.c
+          python3 ikcore-project/experimental/fase6/patch_f6_audio_mix_retry.py \
+            /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'IKF6 ALSA retry' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'SPC_nonzero' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKF6 PACK OK:' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'IKF6 ARCHIVE source:' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_f6_spc_start' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_audio_rate_convert' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'plughw:0,0' /tmp/ikcore_fase5_mgba_frontend.c
