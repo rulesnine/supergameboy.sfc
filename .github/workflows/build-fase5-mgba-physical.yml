@@ -160,27 +160,27 @@ jobs:
         run: |
           set -eu
           mkdir -p stage/bin stage/usr/lib/ikcore-fase5-sgb
-          cp dist/ikcore-fase5-sgb-n2 stage/usr/lib/ikcore-fase5-sgb/
+          cp dist/ikcore-fase5-mgba-n2 stage/usr/lib/ikcore-fase5-sgb/
           cp dist/mgba_libretro.so stage/usr/lib/ikcore-fase5-sgb/
           cat > stage/bin/ikcore-fase5-sgb <<'EOF'
           #!/bin/sh
-          exec /usr/lib/ikcore-fase5-sgb/ikcore-fase5-sgb-n2 "$@"
+          exec /usr/lib/ikcore-fase5-sgb/ikcore-fase5-mgba-n2 "$@"
           EOF
           cat > stage/install <<'EOF'
           #!/bin/sh
           mkdir -p "$rootfs/usr/lib/ikcore-fase5-sgb"
-          copy "./usr/lib/ikcore-fase5-sgb/ikcore-fase5-sgb-n2" "$rootfs/usr/lib/ikcore-fase5-sgb/ikcore-fase5-sgb-n2"
+          copy "./usr/lib/ikcore-fase5-sgb/ikcore-fase5-mgba-n2" "$rootfs/usr/lib/ikcore-fase5-sgb/ikcore-fase5-mgba-n2"
           copy "./usr/lib/ikcore-fase5-sgb/mgba_libretro.so" "$rootfs/usr/lib/ikcore-fase5-sgb/mgba_libretro.so"
           copy "./bin/ikcore-fase5-sgb" "$rootfs/bin/ikcore-fase5-sgb"
-          chmod +x "$rootfs/bin/ikcore-fase5-sgb" "$rootfs/usr/lib/ikcore-fase5-sgb/ikcore-fase5-sgb-n2"
+          chmod +x "$rootfs/bin/ikcore-fase5-sgb" "$rootfs/usr/lib/ikcore-fase5-sgb/ikcore-fase5-mgba-n2"
           EOF
           cat > stage/uninstall <<'EOF'
           #!/bin/sh
           rm -f "$rootfs/bin/ikcore-fase5-sgb"
-          rm -f "$rootfs/usr/lib/ikcore-fase5-sgb/ikcore-fase5-sgb-n2" "$rootfs/usr/lib/ikcore-fase5-sgb/mgba_libretro.so"
+          rm -f "$rootfs/usr/lib/ikcore-fase5-sgb/ikcore-fase5-mgba-n2" "$rootfs/usr/lib/ikcore-fase5-sgb/mgba_libretro.so"
           rmdir "$rootfs/usr/lib/ikcore-fase5-sgb" 2>/dev/null || true
           EOF
-          chmod 755 stage/install stage/uninstall stage/bin/ikcore-fase5-sgb stage/usr/lib/ikcore-fase5-sgb/ikcore-fase5-sgb-n2
+          chmod 755 stage/install stage/uninstall stage/bin/ikcore-fase5-sgb stage/usr/lib/ikcore-fase5-sgb/ikcore-fase5-mgba-n2
           printf '%s\n' \
             'Fase 5 mGBA 0.10.5 standalone ARMv7 performance baseline' \
             'NOT the completed hybrid: NO original SNES SPC/DSP audio.' \
