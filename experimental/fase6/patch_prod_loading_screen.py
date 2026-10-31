@@ -51,6 +51,10 @@ def patch(s,graphics):
     ik_prod_show_loading();
     ik_f6_spc_set_boot_progress(ik_prod_loading_animate);
     ik_f6_spc_set_boot_video(ik_prod_show_firmware_video);
+    /* SNES 32040 Hz PCM routes into the already initialized ALSA ring.
+     * During BIOS startup g_f6_ready=0 so mGBA gameplay mixing is OFF. */
+    ik_f6_spc_set_boot_audio(audio_batch_cb);
+    ik_f6_spc_set_boot_cancel(ik_rc7_boot_cancel);
     g_padfd = open_clovercon();''',
         "display gameboy as soon as Mali EGL is up")
     s=once(s,
