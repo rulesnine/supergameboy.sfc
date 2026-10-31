@@ -98,3 +98,20 @@ La compilación experimental **#33** (GitHub Actions run `41176717270` aprobado)
 - `IKSPC boot_CPU_ms` para observar coste de inicio de firmware original (no aceleración de boot demostrada).
 
 CI verificó ARMv7 hard float, ABI GLIBC <= 2.23, exportaciones SPC, extracción `.sfc.7z`, tar HMOD y SHA256. **Pendiente validación física** de mejora de la máquina de escribir y reducción de bajo flujo de PCM; no declarar audio fiel ni arranque acelerado todavía.
+
+## Validación física Fase 6 #40 — KOF '96 en NES Mini, Clover/Hakchi
+
+El usuario confirmó expresamente que **el sonido ya corre bien** tras restaurar la comunicación de audio SNES por mailbox/puertos SPC700. Registro de 120.01 segundos en consola real:
+- `play avg=59.73 FPS`, `work cap=136.28 FPS`, `work cost=7.338 ms/frame`, `video cost=0.529 ms/frame`, `late frames=0`, 7168 cuadros, 256×224.
+- `IKSPC initialized=1`, `SOUND received=207 sent=207 undelivered=0`, `SPC_frames=7140`, `SPC_nonzero=2283254`.
+- `IKSGB MAILBOX rx=207 dispatched=207 idle=207 ack=414 retries=287 timeout=0 pending=0 maxwait=1 rejected=0`: todos los comandos se despacharon; los reintentos no terminaron en error.
+- `SNES_PCM_mixed=3912175 silent=7697 FIFO=178`; frente a `silent=32593` de la prueba previa #26, reducción observada ~76.4% en ejecuciones diferentes. No constituye por sí sola prueba de fidelidad acústica absoluta.
+- `audio gen=3847803 audio write=3843454 audio drop=0 ALSA recover=0`. Dispositivo de audio operativo, sin pérdida contabilizada. Las muestras generadas pero no escritas pueden permanecer en la cola al finalizar.
+- `SOU_TRN=0 transfer_done=0`: la prueba específica no valida cargas de datos de sonido SOU_TRN. `exit reason=timeout 120 s` corresponde al límite habitual del ejecutable de pruebas.
+- Estado: **#40 base experimental funcional validada físicamente con KOF '96 y audio SGB percibido correcto por el usuario**. No confundir con compatibilidad o fidelidad garantizada para todos los juegos SGB.
+
+Límites y siguientes trabajos, separados de la base #40:
+- Arranque del firmware SGB se percibe lento; no se ha medido ni corregido completamente el tiempo real de inicio.
+- Game Boy clásico es forzado a modelo SGB y tiene marco predeterminado con la paleta base mGBA; no hay selección automática/manual de paletas del SGB original para títulos sin soporte SGB.
+- Tras instalar un HMOD, el usuario reporta que el menú Clover pierde audio y se percibe una imagen suavizada hasta reiniciar la NES Mini. El script F6 instala solo archivos de /bin/ikcore-fase6-* y /usr/lib/ikcore-fase6/*; no se ha aislado la causa en el proceso de Hakchi/Clover. No atribuirlo a cambios de filtro del núcleo sin evidencia.
+- Mantener aisladas las versiones estables #26 y #43 y no modificar el mailbox validado para intentar correcciones de video o paletas.
