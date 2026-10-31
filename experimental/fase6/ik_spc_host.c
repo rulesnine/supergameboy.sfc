@@ -19,8 +19,8 @@
 #include <limits.h>
 #include <errno.h>
 /* The SGB firmware cache contains a user-owned machine state; never shipped. */
-#define IK_PROD_CACHE_DIR "/var/lib/hakchi/sgb-native-test/ikcore-sgb-prod-cache"
-#define IK_PROD_CACHE_MAGIC 0x53474250524f4403ULL
+#define IK_PROD_CACHE_DIR "/var/lib/hakchi/sgb-native-test/ikcore-sgb-quick-cache-v4"
+#define IK_PROD_CACHE_MAGIC 0x53474250524f4404ULL
 #define IK_PROD_MAX_STATE (48u * 1024u * 1024u)
 #define IK_PROD_BORDER_PIXELS (256u * 224u)
 static uint16_t g_prod_boot_frame[IK_PROD_BORDER_PIXELS];
@@ -49,6 +49,17 @@ static void ik_prod_cache_path(char *out,size_t len,uint64_t hash) {
     snprintf(out,len,IK_PROD_CACHE_DIR "/boot-%016llx.cache",
              (unsigned long long)hash);
 }
+/* Full firmware snapshot must contain Snes9x CPU/APU/DSP state, not
+ * the ordinary GB-only "SGB!" libretro snapshot. */
+static int ik_prod_full_snes_snapshot(const uint8_t *p,size_t n) {
+    return p && n>=16u && memcmp(p,"#!s9xsnp:",10u)==0;
+}
+static uint32_t ik_prod_state_check32(const uint8_t *p,size_t n) {
+    uint32_t h=2166136261u;
+    size_t i;
+    for(i=0;i<n;++i){h^=p[i];h*=16777619u;}
+    return h;
+}
 static int ik_prod_border_usable(const uint16_t *p) {
     size_t k;unsigned changes=0; uint16_t first;
     if(g_prod_boot_frames==0)return 0;
@@ -65,11 +76,12 @@ static int ik_prod_border_usable(const uint16_t *p) {
 static int ik_prod_cache_load(IkF6SpcHost *h,uint64_t hash,
                               size_t (*get_size)(void),
                               bool (*restore)(const void *,size_t),
-                              int (*resume)(void),IkF6Log log) {
+                              int (*resume)(void),IkF6Log log,int *core_touched) {
     struct IkProdCacheHeader hdr={0};
     char path[256];FILE *fp=NULL;uint8_t *buf=NULL;
     size_t size=0, expected=0;int ok=0;
     const char *reason="unknown";
+    if(core_touched)*core_touched=0;
     if(!hash||!get_size||!restore||!resume) {
         if(log)log("IKSPC FASTBOOT cache=UNAVAILABLE reason=MISSING_API_OR_PACK_HASH\n");
         return 0;
@@ -107,6 +119,13 @@ static int ik_prod_cache_load(IkF6SpcHost *h,uint64_t hash,
              IK_PROD_BORDER_PIXELS,fp)!=IK_PROD_BORDER_PIXELS){
         reason="BORDER_READ";goto done;
     }
+    if(!ik_prod_full_snes_snapshot(buf,size)) {
+        reason="NOT_FULL_SNES_SNAPSHOT";goto done;
+    }
+    if(hdr.reserved!=ik_prod_state_check32(buf,size)) {
+        reason="STATE_CHECKSUM";goto done;
+    }
+    if(core_touched)*core_touched=1;
     if(!restore(buf,size)){reason="UNSERIALIZE";goto done;}
     if(!resume()){reason="SPC_REACTIVATION";goto done;}
     h->original_border_valid=(int)hdr.border_valid;
@@ -134,7 +153,15 @@ static void ik_prod_cache_save(IkF6SpcHost *h,uint64_t hash,
     size=get_size();
     if(size<4096||size>IK_PROD_MAX_STATE)return;
     buf=(uint8_t*)malloc(size);if(!buf)return;
-    if(!save(buf,size))goto done;
+    if(!save(buf,size)) {
+        if(log)log("IKSPC FASTBOOT cache=NOT_SAVED reason=SNES_SERIALIZE_FAILED\n");
+        goto done;
+    }
+    if(!ik_prod_full_snes_snapshot(buf,size)) {
+        if(log)log("IKSPC FASTBOOT cache=NOT_SAVED reason=NOT_FULL_SNES_SNAPSHOT size=%lu\n",
+                   (unsigned long)size);
+        goto done;
+    }
     (void)mkdir(IK_PROD_CACHE_DIR,0700);
     ik_prod_cache_path(path,sizeof path,hash);
     snprintf(tmp,sizeof tmp,"%s.tmp-%ld",path,(long)getpid());
@@ -144,6 +171,7 @@ static void ik_prod_cache_save(IkF6SpcHost *h,uint64_t hash,
     hdr.serialized_bytes=(uint32_t)size;
     hdr.border_valid=h->original_border_valid;
     hdr.boot_frames=h->boot_frames;
+    hdr.reserved=ik_prod_state_check32(buf,size);
     if(fwrite(&hdr,1,sizeof hdr,fp)!=sizeof hdr ||
        fwrite(buf,1,size,fp)!=size ||
        fwrite(h->original_border_rgb565,sizeof(uint16_t),
@@ -255,6 +283,7 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     bool (*serialize)(void *,size_t)=NULL;
     bool (*unserialize)(const void *,size_t)=NULL;
     int (*resume)(void)=NULL;
+    int cache_touched=0;
     unsigned (*bios_pct_count)(void)=NULL;
     int (*bios_gb_released)(void)=NULL;
     uint64_t pack_hash=0;
@@ -295,9 +324,11 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     SYM(h->frame,"ikcore_spc_frame");
     SYM(h->pull,"ikcore_spc_pull_stereo");
     SYM(h->pending,"ikcore_spc_pending_frames");
-    SYM(serialize_size,"retro_serialize_size");
-    SYM(serialize,"retro_serialize");
-    SYM(unserialize,"retro_unserialize");
+    /* Stock retro_serialize is GB-only in SuperGameBoy mode. The full
+     * firmware cache needs a separate Snes9x SNES+SPC700 snapshot. */
+    SYM(serialize_size,"ikcore_spc_full_snapshot_size");
+    SYM(serialize,"ikcore_spc_full_snapshot_save");
+    SYM(unserialize,"ikcore_spc_full_snapshot_restore");
     SYM(resume,"ikcore_spc_cache_restore_activate");
     SYM(bios_pct_count,"ikcore_spc_bios_border_pct_count");
     SYM(bios_gb_released,"ikcore_spc_bios_gb_released");
@@ -322,8 +353,23 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     memset(g_prod_boot_frame,0,sizeof g_prod_boot_frame);
     memset(g_prod_stock_border,0,sizeof g_prod_stock_border);
     pack_hash=ik_prod_hash_pack(pack);
-    if(ik_prod_cache_load(h,pack_hash,serialize_size,unserialize,resume,log))
+    if(ik_prod_cache_load(h,pack_hash,serialize_size,unserialize,resume,log,
+                          &cache_touched))
         goto boot_done;
+    if(cache_touched) {
+        /* A snapshot decoder can change SNES RAM before reporting failure.
+         * Never run the cold firmware on a half-restored machine. */
+        if(log)log("IKSPC FASTBOOT cold restart after failed SNES restore\n");
+        h->unload_game();h->loaded=0;
+        if(!load_game(&game)) {
+            if(log)log("IKSPC FASTBOOT clean reload failed\n");
+            goto fail;
+        }
+        h->loaded=1;
+        g_prod_boot_frames=0;g_prod_stock_valid=0;
+        memset(g_prod_boot_frame,0,sizeof g_prod_boot_frame);
+        memset(g_prod_stock_border,0,sizeof g_prod_stock_border);
+    }
     if(log) log("IKSPC original SGB firmware boot started (max 4800 frames)\n");
     for (i=0;i<4800;++i) {
         if(h->boot_ready()) break;
