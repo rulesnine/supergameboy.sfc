@@ -8,6 +8,7 @@
 #define _GNU_SOURCE
 #include "ik_spc_host.h"
 #include "ik_sgb_boot_av.h"
+#include "ik_sgb_intro_gate.h"
 #include "libretro.h"
 #include <dlfcn.h>
 #include <stdio.h>
@@ -194,6 +195,15 @@ static void (*g_prod_boot_progress)(unsigned);
 static void (*g_prod_boot_video)(const uint16_t *,unsigned);
 static size_t (*g_prod_boot_audio)(const int16_t *,size_t);
 static unsigned long g_boot_pcm_frames;
+/* RC9: in Snes9x the GB cart begins after its boot-ROM handoff.
+ * Do NOT show or capture those cart frames: mGBA runs them once. */
+static int (*g_prod_cart_started)(void);
+static IkSgbIntroGate g_prod_intro_gate;
+static int ik_prod_intro_allowed(void) {
+    int started=g_prod_cart_started?g_prod_cart_started():0;
+    return ik_sgb_intro_allow(&g_prod_intro_gate,started,g_prod_boot_frames);
+}
+
 static int (*g_prod_boot_cancel)(void);
 void ik_f6_spc_set_boot_cancel(int (*callback)(void)) {
     g_prod_boot_cancel=callback;
@@ -269,22 +279,30 @@ static void no_video(const void *p,unsigned w,unsigned h,size_t pitch)
         } else return;
     }
     ++g_prod_boot_frames;
+    /* Snes9x still runs internally until the SNES audio firmware is ready.
+     * Once GB boot ROM hands control to the game, only mGBA may display
+     * that cart's logo, publisher splash and game frames. */
+    if(!ik_prod_intro_allowed())return;
     ikboot_video(g_prod_boot_frame,g_prod_boot_frames);
-    /* Deliver every genuine SGB video frame. The frontend performs 60Hz
-     * presentation gating only when the core runs ahead; it never slows
-     * the SNES firmware or fabricates animation frames. */
+    ik_sgb_intro_note_video(&g_prod_intro_gate);
     if(g_prod_boot_video)
         g_prod_boot_video(g_prod_boot_frame,g_prod_boot_frames);
 }
 static void no_audio(short l,short r) {
     const int16_t pair[2]={(int16_t)l,(int16_t)r};
+    if(!ik_prod_intro_allowed())return;
     ikboot_audio(pair,1u);
+    ik_sgb_intro_note_audio(&g_prod_intro_gate);
     if(g_prod_boot_audio) {
         g_boot_pcm_frames += g_prod_boot_audio(pair,1u);
     }
 }
 static size_t no_audio_batch(const short *p,size_t frames) {
-    if(p && frames)ikboot_audio((const int16_t*)p,frames);
+    if(!ik_prod_intro_allowed())return frames;
+    if(p && frames) {
+        ikboot_audio((const int16_t*)p,frames);
+        ik_sgb_intro_note_audio(&g_prod_intro_gate);
+    }
     if(g_prod_boot_audio && p && frames)
         g_boot_pcm_frames += g_prod_boot_audio((const int16_t*)p,frames);
     return frames;
@@ -362,6 +380,7 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     SYM(resume,"ikcore_spc_cache_restore_activate");
     SYM(bios_pct_count,"ikcore_spc_bios_border_pct_count");
     SYM(bios_gb_released,"ikcore_spc_bios_gb_released");
+    SYM(g_prod_cart_started,"ikcore_spc_bios_cart_started");
 #undef SYM
     set_environment(snes_environment);
     set_video(no_video);
@@ -380,6 +399,7 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     h->loaded=1;
     clock_gettime(CLOCK_MONOTONIC,&boot_start_wall);
     g_prod_boot_frames=0;g_prod_stock_valid=0;
+    memset(&g_prod_intro_gate,0,sizeof g_prod_intro_gate);
     memset(g_prod_boot_frame,0,sizeof g_prod_boot_frame);
     memset(g_prod_stock_border,0,sizeof g_prod_stock_border);
     pack_hash=ik_prod_hash_pack(pack);
@@ -457,6 +477,13 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     }
     ik_prod_cache_save(h,pack_hash,serialize_size,serialize,log);
     ikboot_end(1);
+    if(log) {
+        log("IKSPC BOOT CUT: intro_frames=%u cart_started=%u at_snes_frame=%u "
+            "audio_callbacks=%u; Snes9x cart hidden, mGBA cart visible once\n",
+            g_prod_intro_gate.intro_video_frames,
+            g_prod_intro_gate.cart_started,g_prod_intro_gate.cut_boot_frame,
+            g_prod_intro_gate.intro_audio_callbacks);
+    }
     if(log) {
         clock_gettime(CLOCK_MONOTONIC,&boot_end_wall);
         double seconds=(double)(boot_end_wall.tv_sec-boot_start_wall.tv_sec)+
