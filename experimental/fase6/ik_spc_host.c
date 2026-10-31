@@ -281,7 +281,6 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     pack_hash=ik_prod_hash_pack(pack);
     if(ik_prod_cache_load(h,pack_hash,serialize_size,unserialize,resume,log))
         goto boot_done;
-    const double boot_start_time = (double)clock() / CLOCKS_PER_SEC;
     if(log) log("IKSPC original SGB firmware boot started (max 4800 frames)\n");
     for (i=0;i<4800;++i) {
         if(h->boot_ready()) break;
