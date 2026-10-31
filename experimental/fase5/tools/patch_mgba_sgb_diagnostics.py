@@ -30,7 +30,15 @@ void ikcore_fase5_sgb_status(unsigned *model, unsigned *border,
 ''' + ANCHOR
 def patch(s):
     if s.count(ANCHOR)!=1: raise ValueError("libretro.c reset hook not unique")
-    return s.replace(ANCHOR,REPLACEMENT,1)
+    out = s.replace(ANCHOR, REPLACEMENT, 1)
+    load_anchor = "bool retro_load_game(const struct retro_game_info* game) {"
+    if out.count(load_anchor) != 1:
+        raise ValueError("libretro.c load hook not unique")
+    out = out.replace(load_anchor,
+                      "extern void ikcore_fase5_sgb_reset_packets(void);\n"
+                      + load_anchor
+                      + "\n    ikcore_fase5_sgb_reset_packets();", 1)
+    return out
 if __name__=="__main__":
     if len(sys.argv)!=2: raise SystemExit("Usage: patch_mgba_sgb_diagnostics.py SRC_LIBRETRO_C")
     f=Path(sys.argv[1]); f.write_text(patch(f.read_text()))
