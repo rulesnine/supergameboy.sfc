@@ -103,10 +103,35 @@ static void ik_prod_show_loading(void) {
     ik_prod_load_phase=1;
 }
 
+/* The original Snes9x BIOS is already drawing 256x224 SGB startup
+ * frames including its real Nintendo presentation. Display only those
+ * pixels; never fabricate logos/alter the SNES/SPC program. */
+static int ik_prod_fw_visible=0;
+static void ik_prod_show_firmware_video(const uint16_t *pixels,unsigned frame) {
+    size_t k;unsigned different=0;
+    uint16_t first;
+    if(!pixels||g_swap_failed)return;
+    first=pixels[0];
+    for(k=0;k<256u*224u;k+=43u) {
+        if(pixels[k]!=first && ++different>=12u)break;
+    }
+    if(different<12u)return; /* black/flat startup: keep last visible art. */
+    g_border_fade=1.0f;
+    upload_rgb565_direct(pixels,256u,224u);
+    draw_texture_frame(256u,224u);
+    if(!eglSwapBuffers(g_display,g_surface)) {
+        log_printf("IKSGB FWVIDEO: EGL swap failed=0x%04x\\n",eglGetError());
+        g_swap_failed=1;
+        return;
+    }
+    if(!ik_prod_fw_visible)
+        log_printf("IKSGB FWVIDEO: LIVE_SNES_BIOS frame=%u; authentic border/intro\\n",frame);
+    ik_prod_fw_visible=1;
+}
 /* Animated dots driven by actual firmware progress or by emulated GB frames. */
 static void ik_prod_loading_animate(unsigned ticks) {
     unsigned step=(ticks/24u)%4u, i;
-    if(!ik_prod_load_built)return;
+    if(ik_prod_fw_visible || !ik_prod_load_built)return;
     ik_prod_rect(112,95,37,5,0xBDE9u);
     for(i=0;i<3;i++)
         if(i<step)ik_prod_rect(113+(int)i*11,95,5,5,0x2946u);
