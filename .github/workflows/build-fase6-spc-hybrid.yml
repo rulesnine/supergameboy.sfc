@@ -42,6 +42,10 @@ jobs:
           /tmp/fase5-relay
           gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_bridge.c ik_sgb_mgba_telemetry.c ../fase6/test_sou_trn_capture.c -I. -o /tmp/fase6-sou
           /tmp/fase6-sou
+          gcc -std=c11 -Wall -Wextra -Werror -O2 \
+            ../fase6/ik_sgbpack_rom.c ../fase6/test_ik_sgbpack_rom.c \
+            -I../fase6 -o /tmp/fase6-sgbpack-rom
+          /tmp/fase6-sgbpack-rom
           gcc -std=c11 -Wall -Wextra -Werror -O2 ik_sgb_spc_route.c test_ik_sgb_spc_route.c -o /tmp/fase5-spc-route
           /tmp/fase5-spc-route
           gcc -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O2 -fsyntax-only \
@@ -78,6 +82,9 @@ jobs:
             /tmp/ikcore_fase5_mgba_frontend.c
           python3 ikcore-project/experimental/fase6/patch_mgba_f6_hybrid.py \
             /tmp/ikcore_fase5_mgba_frontend.c
+          python3 ikcore-project/experimental/fase6/patch_f6_sgbpack_single_file.py \
+            /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'IKF6 PACK OK:' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_f6_spc_start' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_audio_rate_convert' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'plughw:0,0' /tmp/ikcore_fase5_mgba_frontend.c
@@ -202,6 +209,7 @@ jobs:
             "$GITHUB_WORKSPACE/ikcore-project/experimental/fase5/ik_sgb_spc_route.c" \
             "$GITHUB_WORKSPACE/ikcore-project/experimental/fase5/ik_sgb_bridge.c" \
             "$GITHUB_WORKSPACE/ikcore-project/experimental/fase6/ik_spc_host.c" \
+            "$GITHUB_WORKSPACE/ikcore-project/experimental/fase6/ik_sgbpack_rom.c" \
             -o dist/ikcore-fase5-mgba-n2 \
             -Wl,-rpath-link,"$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf" \
             "$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libdl.so.2"
@@ -255,8 +263,9 @@ jobs:
           chmod 755 stage/install stage/uninstall stage/bin/ikcore-fase6-hybrid stage/usr/lib/ikcore-fase6/ikcore-fase6-n2
           printf '%s\n' \
             'Fase 6 EXPERIMENTAL: mGBA GB CPU/PPU/APU + separate original Ik Core #117 SGB N-SPC audio' \
-            'No firmware, BIOS or commercial ROM is bundled. Supply both matching files.' \
-            'Run: /bin/ikcore-fase6-hybrid /path/KOF96.gb /path/KOF96_SGBPACK.sfc' \
+            'No firmware, BIOS or commercial ROM is bundled; supply user-owned SGBPACK1.' \
+            'One-file: /bin/ikcore-fase6-hybrid /path/game_SGBPACK1.sfc' \
+            'Optional two-file: /bin/ikcore-fase6-hybrid /path/KOF96.gb /path/KOF96_SGBPACK.sfc' \
             'Fallback SGBPACK: /var/lib/hakchi/sgb-native-test/KOF96_SGBPACK_v1_REUPLOAD.sfc' \
             'Snes9x BIOS bootstrap may take hundreds/thousands of emulated frames.' \
             'If SPC boot fails, fallback is GB-only audio; see IKSPC diagnostics.' \
