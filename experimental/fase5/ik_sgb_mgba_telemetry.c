@@ -3,7 +3,7 @@
  * original 16-byte packets; no second GB CPU and no fake SNES sound playback.
  * All APIs are emulation-thread-only. No background thread or allocation.
  */
-#include "ik_sgb_bridge.h"
+#include "ik_sgb_mgba_relay.h"
 #include <stdint.h>
 #include <string.h>
 
