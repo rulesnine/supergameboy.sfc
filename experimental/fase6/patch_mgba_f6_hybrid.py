@@ -23,11 +23,14 @@ def patch(s):
       'static IkSgbSpcRoute g_f6_route;\n'
       'static int g_f6_ready;\n'
       'static int (*ikcore_f6_pop)(IkSgbPacket *);\n'
+      'static int (*ikcore_f6_sou_pop)(uint8_t *,size_t,uint64_t *);\n'
       'static void (*ikcore_fase5_stats)(uint64_t *,uint64_t *,uint64_t *,uint64_t *);','SPC state')
     s=once(s,'    if (!ikcore_fase5_sgb_status) log_printf("WARN: SGB mode status not present\\n");',
       '    if (!ikcore_fase5_sgb_status) log_printf("WARN: SGB mode status not present\\n");\n'
       '    *(void **)(&ikcore_f6_pop) = dlsym(g_libcore, "ikcore_fase5_sgb_pop_packet");\n'
-      '    if (!ikcore_f6_pop) log_printf("IKSPC ERROR: mGBA SGB queue unavailable\\n");',
+      '    if (!ikcore_f6_pop) log_printf("IKSPC ERROR: mGBA SGB queue unavailable\\n");\n'
+      '    *(void **)(&ikcore_f6_sou_pop) = dlsym(g_libcore, "ikcore_fase6_sou_trn_pop");\n'
+      '    if (!ikcore_f6_sou_pop) log_printf("IKSPC ERROR: mGBA SOU_TRN transfer capture unavailable\\n");',
       'mGBA packet symbol')
     s=once(s,'    for (i = 0; i < frames; ++i) {\n'
       '        g_audio_ring[g_audio_ring_write * 2u + 0u] = data[i * 2u + 0u];\n'
@@ -87,6 +90,16 @@ int main(int argc, char **argv)
             while(consumed<64 && ikcore_f6_pop(&msg)) {
                 ik_sgb_spc_route_packet(&g_f6_route,&msg);
                 ++consumed;
+            }
+        }
+        if(ikcore_f6_sou_pop) {
+            uint8_t payload[IK_SGB_TRANSFER_SIZE];
+            uint64_t completed_frame=0;
+            while(ikcore_f6_sou_pop(payload,sizeof(payload),&completed_frame)) {
+                IkSgbTransfer transfer;
+                if(ik_sgb_transfer_capture(&transfer,0x09,payload,
+                                           sizeof(payload),completed_frame))
+                    (void)ik_sgb_spc_route_transfer(&g_f6_route,&transfer);
             }
         }
 ''','SPC advance and packet routing on one emulation thread')
