@@ -68,25 +68,47 @@ static int ik_prod_cache_load(IkF6SpcHost *h,uint64_t hash,
                               int (*resume)(void),IkF6Log log) {
     struct IkProdCacheHeader hdr;
     char path[256];FILE *fp=NULL;uint8_t *buf=NULL;
-    size_t size;int ok=0;
-    if(!hash||!get_size||!restore||!resume)return 0;
+    size_t size=0, expected=0;int ok=0;
+    const char *reason="unknown";
+    if(!hash||!get_size||!restore||!resume) {
+        if(log)log("IKSPC FASTBOOT cache=UNAVAILABLE reason=MISSING_API_OR_PACK_HASH\n");
+        return 0;
+    }
     ik_prod_cache_path(path,sizeof path,hash);
     fp=fopen(path,"rb");
     if(!fp) {
         if(log)log("IKSPC FASTBOOT cache=ABSENT errno=%d (pack-dependent cold boot)\n",errno);
         return 0;
     }
-    if(fread(&hdr,1,sizeof hdr,fp)!=sizeof hdr ||
-       hdr.magic!=IK_PROD_CACHE_MAGIC || hdr.pack_fingerprint!=hash ||
-       hdr.serialized_bytes<4096 || hdr.serialized_bytes>IK_PROD_MAX_STATE ||
-       hdr.serialized_bytes!=get_size() || hdr.border_valid>1)goto done;
+    if(fread(&hdr,1,sizeof hdr,fp)!=sizeof hdr) {
+        reason="HEADER_READ";goto done;
+    }
+    if(hdr.magic!=IK_PROD_CACHE_MAGIC) {
+        reason="CACHE_FORMAT";goto done;
+    }
+    if(hdr.pack_fingerprint!=hash) {
+        reason="PACK_HASH";goto done;
+    }
+    if(hdr.serialized_bytes<4096||hdr.serialized_bytes>IK_PROD_MAX_STATE) {
+        reason="STATE_SIZE_RANGE";goto done;
+    }
+    expected=get_size();
+    if(hdr.serialized_bytes!=expected) {
+        reason="STATE_SIZE_CHANGED";goto done;
+    }
+    if(hdr.border_valid>1) {
+        reason="BORDER_FLAG";goto done;
+    }
     size=hdr.serialized_bytes;
-    buf=(uint8_t*)malloc(size);if(!buf)goto done;
-    if(fread(buf,1,size,fp)!=size)goto done;
+    buf=(uint8_t*)malloc(size);
+    if(!buf){reason="NO_MEMORY";goto done;}
+    if(fread(buf,1,size,fp)!=size){reason="STATE_READ";goto done;}
     if(fread(h->original_border_rgb565,sizeof(uint16_t),
-             IK_PROD_BORDER_PIXELS,fp)!=IK_PROD_BORDER_PIXELS)goto done;
-    if(!restore(buf,size))goto done;
-    if(!resume())goto done;
+             IK_PROD_BORDER_PIXELS,fp)!=IK_PROD_BORDER_PIXELS){
+        reason="BORDER_READ";goto done;
+    }
+    if(!restore(buf,size)){reason="UNSERIALIZE";goto done;}
+    if(!resume()){reason="SPC_REACTIVATION";goto done;}
     h->original_border_valid=(int)hdr.border_valid;
     h->boot_frames=hdr.boot_frames;
     h->fastboot_cache_hit=1;
@@ -94,8 +116,12 @@ static int ik_prod_cache_load(IkF6SpcHost *h,uint64_t hash,
     if(log)log("IKSPC FASTBOOT cache=HIT saved_boot_frames=%u border=%s\n",
                h->boot_frames,h->original_border_valid?"BIOS_ORIGINAL":"UNVERIFIED");
 done:
+    if(!ok && log) {
+        log("IKSPC FASTBOOT cache=REJECTED reason=%s saved_size=%u core_size=%lu\n",
+            reason,hdr.serialized_bytes,(unsigned long)expected);
+        log("IKSPC FASTBOOT cache=MISSED_OR_INVALID; full firmware boot used\n");
+    }
     free(buf);fclose(fp);
-    if(!ok && log)log("IKSPC FASTBOOT cache=MISSED_OR_INVALID; full firmware boot used\n");
     return ok;
 }
 static void ik_prod_cache_save(IkF6SpcHost *h,uint64_t hash,
