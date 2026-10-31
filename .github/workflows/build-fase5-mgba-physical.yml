@@ -96,6 +96,7 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS="-lm" \
             -DCMAKE_C_FLAGS="-O3 -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -fPIC" \
             -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-rpath-link,$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf" \
+            -DM_LIBRARY="$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6" \
             -DM_CORE_GBA=ON -DM_CORE_GB=ON \
             -DBUILD_LIBRETRO=ON -DBUILD_SHARED=OFF -DBUILD_STATIC=OFF \
             -DBUILD_SDL=OFF -DBUILD_QT=OFF -DBUILD_GL=OFF -DBUILD_GLES2=OFF \
