@@ -321,6 +321,8 @@ jobs:
               > stage/bin/ikcore-sgb-prod
           cp stage/bin/ikcore-sgb-prod stage/bin/ikcore-sgb-prod-7z
           cp p7zip/License.txt stage/LICENSE-7ZR.txt
+          cp mgba/LICENSE stage/LICENSE-mGBA-MPL2.txt
+          cp supersnes9x/LICENSE stage/LICENSE-Snes9x.txt
           cat > stage/install <<'EOF'
           #!/bin/sh
           mkdir -p "$rootfs/usr/lib/ikcore-sgb-prod"
@@ -355,6 +357,7 @@ jobs:
           SEPARATE MODULE: installs only /usr/lib/ikcore-sgb-prod and /bin/ikcore-sgb-prod*; stable #26, #43, F6 #40 unchanged.
           LOGGER: /var/lib/hakchi/sgb-native-test/ikcore-sgb-prod-*.log
           CREDITS: Rulesnine — project owner; OpenAI — development assistance; mGBA contributors; Snes9x contributors; Hakchi CE; p7zip.
+          NOTICE: mGBA MPL 2.0, Snes9x license and 7zr distribution licenses included with this HMOD; see LICENSE-* files.
           LICENSE: external projects retain their respective licenses; read LICENSE-7ZR.txt.
           EOF
           cp stage/readme.txt stage/README.txt
