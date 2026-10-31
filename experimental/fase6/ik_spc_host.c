@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <stdarg.h>
+#include <time.h>
 
 static IkF6Log g_log;
 static const char *g_system_directory="/var/lib/hakchi/sgb-native-test";
@@ -68,7 +69,7 @@ static void *required(void *lib,const char *name) {
     return p;
 }
 int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
-                    unsigned out_rate, IkF6Log log) {
+                    unsigned out_rate, double gb_fps, IkF6Log log) {
     void (*set_environment)(retro_environment_t);
     void (*set_video)(retro_video_refresh_t);
     void (*set_sample)(retro_audio_sample_t);
@@ -107,6 +108,7 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     SYM(load_game,"retro_load_game");
     SYM(run,"retro_run");
     SYM(h->boot_ready,"ikcore_spc_boot_ready");
+    SYM(h->set_frame_fps,"ikcore_spc_set_frame_fps");
     SYM(h->send_sound,"ikcore_spc_send_sound");
     SYM(h->send_transfer,"ikcore_spc_send_sou_trn");
     SYM(h->frame,"ikcore_spc_frame");
@@ -128,6 +130,7 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
         goto fail;
     }
     h->loaded=1;
+    const double boot_start_time = (double)clock() / CLOCKS_PER_SEC;
     if(log) log("IKSPC original SGB firmware boot started (max 4800 frames)\n");
     for (i=0;i<4800;++i) {
         if(h->boot_ready()) break;
@@ -140,7 +143,14 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
         if(log) log("IKSPC firmware boot incomplete: audio SNES disabled\n");
         goto fail;
     }
-    if(log) log("IKSPC initialized=1 boot_frames=%u SNES GB CPU STOPPED\n",i);
+    if (!h->set_frame_fps(gb_fps)) {
+        if(log) log("IKSPC ERROR: invalid GB fps=%f\n",gb_fps);
+        goto fail;
+    }
+    if(log) log("IKSPC initialized=1 boot_frames=%u GB_fps=%.5f SPC_cycles_per_frame=%.2f SNES GB CPU STOPPED\n",
+                i, gb_fps, 1024000.0/gb_fps);
+    if(log) log("IKSPC boot_CPU_ms=%ld (CPU timing, not wall-clock)\n",
+                (long)(((double)clock()/CLOCKS_PER_SEC-boot_start_time)*1000.0));
     return 1;
 fail:
     ik_f6_spc_stop(h);
