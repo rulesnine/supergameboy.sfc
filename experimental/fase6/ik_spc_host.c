@@ -7,6 +7,7 @@
  */
 #define _GNU_SOURCE
 #include "ik_spc_host.h"
+#include "ik_sgb_boot_av.h"
 #include "libretro.h"
 #include <dlfcn.h>
 #include <stdio.h>
@@ -268,6 +269,7 @@ static void no_video(const void *p,unsigned w,unsigned h,size_t pitch)
         } else return;
     }
     ++g_prod_boot_frames;
+    ikboot_video(g_prod_boot_frame,g_prod_boot_frames);
     /* Deliver every genuine SGB video frame. The frontend performs 60Hz
      * presentation gating only when the core runs ahead; it never slows
      * the SNES firmware or fabricates animation frames. */
@@ -276,11 +278,13 @@ static void no_video(const void *p,unsigned w,unsigned h,size_t pitch)
 }
 static void no_audio(short l,short r) {
     const int16_t pair[2]={(int16_t)l,(int16_t)r};
+    ikboot_audio(pair,1u);
     if(g_prod_boot_audio) {
         g_boot_pcm_frames += g_prod_boot_audio(pair,1u);
     }
 }
 static size_t no_audio_batch(const short *p,size_t frames) {
+    if(p && frames)ikboot_audio((const int16_t*)p,frames);
     if(g_prod_boot_audio && p && frames)
         g_boot_pcm_frames += g_prod_boot_audio((const int16_t*)p,frames);
     return frames;
@@ -379,9 +383,17 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     memset(g_prod_boot_frame,0,sizeof g_prod_boot_frame);
     memset(g_prod_stock_border,0,sizeof g_prod_stock_border);
     pack_hash=ik_prod_hash_pack(pack);
-    if(ik_prod_cache_load(h,pack_hash,serialize_size,unserialize,resume,log,
-                          &cache_touched))
-        goto boot_done;
+    /* A SNES state cache by itself skips the Nintendo intro. Prefer a full
+     * cold boot once to record its genuine A/V; later starts replay it at
+     * accurate video/audio cadence while loading the already-ready SNES
+     * state in milliseconds. No fake loading screen or redistributed ROM. */
+    if(ikboot_has(pack_hash)) {
+        if(ik_prod_cache_load(h,pack_hash,serialize_size,unserialize,resume,log,
+                              &cache_touched))
+            goto boot_done;
+    } else if(log) {
+        log("IKSPC BOOT AV: genuine intro not recorded for this package; cold BIOS capture required\\n");
+    }
     if(cache_touched) {
         /* A snapshot decoder can change SNES RAM before reporting failure.
          * Never run the cold firmware on a half-restored machine. */
@@ -397,6 +409,7 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
         memset(g_prod_stock_border,0,sizeof g_prod_stock_border);
     }
     g_boot_pcm_frames=0u;
+    ikboot_begin(pack_hash);
     if(log) log("IKSPC original SGB firmware boot started (max 4800 frames)\n");
     for (i=0;i<4800;++i) {
         if(g_prod_boot_cancel && g_prod_boot_cancel()) {
@@ -423,6 +436,7 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
     h->ready=h->boot_ready();
     h->boot_frames=i;
     if(!h->ready) {
+        ikboot_end(0);
         if(log) log("IKSPC firmware boot incomplete: audio SNES disabled\n");
         goto fail;
     }
@@ -442,6 +456,7 @@ int ik_f6_spc_start(IkF6SpcHost *h,const char *so,const char *pack,
         log("IKSGB BORDER source=FALLBACK (stock BIOS frame not safely captured)\n");
     }
     ik_prod_cache_save(h,pack_hash,serialize_size,serialize,log);
+    ikboot_end(1);
     if(log) {
         clock_gettime(CLOCK_MONOTONIC,&boot_end_wall);
         double seconds=(double)(boot_end_wall.tv_sec-boot_start_wall.tv_sec)+
@@ -463,8 +478,15 @@ boot_done:
               h->fastboot_cache_hit,h->original_border_valid,
               (unsigned long)((boot_end_wall.tv_sec-boot_start_wall.tv_sec)*1000L+
               (boot_end_wall.tv_nsec-boot_start_wall.tv_nsec)/1000000L));
+    if(h->fastboot_cache_hit) {
+        if(log)log("IKSPC BOOT AV: presenting cached ORIGINAL SGB Nintendo intro at 60.0988Hz\\n");
+        if(!ikboot_play(pack_hash,g_prod_boot_video,g_prod_boot_audio,
+                        g_prod_boot_cancel,log) && log)
+            log("IKSPC BOOT AV: replay unavailable; no fabricated intro\\n");
+    }
     return 1;
 fail:
+    ikboot_end(0);
     ik_f6_spc_stop(h);
     return 0;
 }
