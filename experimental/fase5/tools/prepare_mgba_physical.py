@@ -25,6 +25,14 @@ def patch(s):
          'log_printf("core mode   : mGBA 0.10.5 GB libretro; no SNES SPC/DSP\\n");', 'core mode'),
         ('log_printf("audio path  : GB APU PCM rate-lock 32040 Hz + SNES SPC/DSP paralelo, ring 8192/prefill 1024\\n");',
          'log_printf("audio path  : GB APU only; SNES SOUND not available in this baseline\\n");', 'audio label'),
+        ('case RETRO_ENVIRONMENT_GET_VARIABLE:\n            return false; /* core falls back to its safe defaults */',
+         'case RETRO_ENVIRONMENT_GET_VARIABLE: {\n'
+         '            struct retro_variable *v = (struct retro_variable *)data;\n'
+         '            if (!strcmp(v->key, "mgba_gb_model")) { v->value = "Super Game Boy"; return true; }\n'
+         '            if (!strcmp(v->key, "mgba_sgb_borders")) { v->value = "ON"; return true; }\n'
+         '            if (!strcmp(v->key, "mgba_use_bios")) { v->value = "OFF"; return true; }\n'
+         '            return false;\n'
+         '        }', 'sgb options'),
         ('static void (*core_retro_set_controller_port_device)(unsigned,unsigned);',
          'static void (*core_retro_set_controller_port_device)(unsigned,unsigned);\nstatic void (*ikcore_fase5_stats)(uint64_t *,uint64_t *,uint64_t *,uint64_t *);', 'stats declaration'),
         ('if (load_core() != 0) goto cleanup;',
