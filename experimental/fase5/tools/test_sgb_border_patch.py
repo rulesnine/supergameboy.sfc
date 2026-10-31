@@ -9,7 +9,7 @@ assert x.count('enableSGBBorder(video->renderer, false)')==1
 assert x.count('enableSGBBorder(video->renderer, true)')==1
 assert 'video->p->model & GB_MODEL_SGB' in x
 assert 'video->sgbBorders' in x
-assert 'SGB default bezel' in x
+assert 'IKF5 SGB fallback' in x
 try: patch('no valid anchor')
 except ValueError: pass
 else: raise AssertionError('fail closed')
