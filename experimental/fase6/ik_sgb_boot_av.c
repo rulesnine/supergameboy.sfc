@@ -11,10 +11,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
 #include <errno.h>
+#ifndef IK_BOOT_DIR
 #define IK_BOOT_DIR "/var/lib/hakchi/sgb-native-test/ikcore-sgb-quick-cache-v4"
+#endif
 #define IK_BOOT_PIXELS (256u*224u)
 #define IK_BOOT_LIMIT (32u*1024u*1024u)
 #define IK_BOOT_MAGIC "IKAV0001"
