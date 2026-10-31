@@ -277,12 +277,12 @@ static void no_video(const void *p,unsigned w,unsigned h,size_t pitch)
 static void no_audio(short l,short r) {
     const int16_t pair[2]={(int16_t)l,(int16_t)r};
     if(g_prod_boot_audio) {
-        g_prod_boot_pcm_frames += g_prod_boot_audio(pair,1u);
+        g_boot_pcm_frames += g_prod_boot_audio(pair,1u);
     }
 }
 static size_t no_audio_batch(const short *p,size_t frames) {
     if(g_prod_boot_audio && p && frames)
-        g_prod_boot_pcm_frames += g_prod_boot_audio((const int16_t*)p,frames);
+        g_boot_pcm_frames += g_prod_boot_audio((const int16_t*)p,frames);
     return frames;
 }
 static void no_input_poll(void){}
