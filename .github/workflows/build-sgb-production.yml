@@ -197,6 +197,9 @@ jobs:
           python3 ikcore-project/experimental/fase6/patch_f6_spc_cadence.py supersnes9x
           python3 ikcore-project/experimental/fase6/patch_snes9x_spc_exports.py \
             supersnes9x/libretro/libretro.cpp
+          python3 ikcore-project/experimental/fase6/patch_snes9x_original_border.py \
+            supersnes9x/sgb/sgb.cpp
+          grep -q 'ikcore_spc_bios_border_pct_count' supersnes9x/sgb/sgb.cpp
           grep -q 'ikcore_spc_set_frame_fps' supersnes9x/libretro/libretro.cpp
           grep -q 'ikcore_spc_mailbox_stats' supersnes9x/libretro/libretro.cpp
           grep -q 'ikcore_spc_cache_restore_activate' supersnes9x/libretro/libretro.cpp
@@ -320,6 +323,7 @@ jobs:
           "$READELF" -Ws dist/ikcore_spc_libretro.so | grep -q 'ikcore_spc_set_frame_fps'
           "$READELF" -Ws dist/ikcore_spc_libretro.so | grep -q 'ikcore_spc_mailbox_stats'
           "$READELF" -Ws dist/ikcore_spc_libretro.so | grep -q 'ikcore_spc_cache_restore_activate'
+          "$READELF" -Ws dist/ikcore_spc_libretro.so | grep -q 'ikcore_spc_bios_border_pct_count'
           sha256sum dist/* > dist/SHA256SUMS
       - name: Package independent Ik Core SGB Production Candidate HMOD
         run: |
