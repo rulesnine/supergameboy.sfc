@@ -134,6 +134,23 @@ jobs:
           # Restrict 7zr to portable CRC32 on the NES Mini ARMv7 CPU.
           sed -i 's/^#if defined(MY_CPU_ARM_OR_ARM64)$/#if defined(MY_CPU_ARM64)/' ../../../../C/7zCrc.c
           grep -q 'MY_CPU_ARM64' ../../../../C/7zCrc.c
+          # Upstream p7zip-zstd's fast-lzma2 makefile only emits .so and
+          # uses host gcc. Build its pure-C static library with our ARMv7
+          # toolchain before running the 7zr bundler to avoid x86 objects.
+          mkdir -p _o
+          (
+            cd ../../../../C/fast-lzma2
+            for src in *.c; do
+              "$CC" --sysroot="$GITHUB_WORKSPACE/xenial-sysroot" \
+                -O2 -fPIC -pthread -march=armv7-a -mtune=cortex-a7 \
+                -mfpu=neon-vfpv4 -mfloat-abi=hard \
+                -c "$src" -o "${src%.c}.o"
+            done
+            "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-ar" \
+              rcs libfast-lzma2.a ./*.o
+            cp libfast-lzma2.a ../CPP/7zip/Bundles/Alone7z/_o/ 2>/dev/null || :
+          )
+          cp ../../../../C/fast-lzma2/libfast-lzma2.a _o/libfast-lzma2.a
           # Makefile uses MY_ARCH for compile+link flags and its own LDFLAGS.
           make -f makefile.gcc -j2 ST_MODE=1 \
              MY_ARCH="--sysroot=$GITHUB_WORKSPACE/xenial-sysroot -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -static-libstdc++ -static-libgcc" \
