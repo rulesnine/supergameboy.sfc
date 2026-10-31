@@ -130,7 +130,7 @@ jobs:
           grep -q 'IKSGB LOADING HANDOFF' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKSAVE SRAM SAVE' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'IKCSUSP2' /tmp/ikcore_fase5_mgba_frontend.c
-          grep -q 'ik_suspend_png_write' /tmp/ikcore_fase5_mgba_frontend.c
+          grep -q 'ik_susp_png_write' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_suspend_maybe_restore' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_prod_sram_flush' /tmp/ikcore_fase5_mgba_frontend.c
           grep -q 'ik_prod_show_loading();' /tmp/ikcore_fase5_mgba_frontend.c
