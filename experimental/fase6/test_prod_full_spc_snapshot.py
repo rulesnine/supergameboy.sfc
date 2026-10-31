@@ -39,6 +39,7 @@ int S9xUnfreezeGameMem(const uint8 *in,uint32 n) {
     return (!Settings.SuperGameBoy && !Settings.SGB_BIOSModeActive &&
             n==400u && std::memcmp(in,"#!s9xsnp:",9u)==0) ? SUCCESS : -1;
 }
+bool S9xSGBBootHandoffCaptured(void) {return false;}
 extern "C" {
 ''' + bridge + r'''
 }
