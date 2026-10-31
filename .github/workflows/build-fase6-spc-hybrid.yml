@@ -24,6 +24,13 @@ jobs:
           ref: 0.10.5
           submodules: true
           path: mgba
+      - name: Checkout 7zr standalone 7z decompressor source
+        uses: actions/checkout@v4
+        with:
+          repository: p7zip-project/p7zip
+          ref: master
+          path: p7zip
+          fetch-depth: 1
       - name: Checkout Snes9x #117 N-SPC firmware engine
         uses: actions/checkout@v4
         with:
@@ -118,6 +125,25 @@ jobs:
           for pkg in xenial-debs/*.deb; do dpkg-deb -x "$pkg" xenial-sysroot; done
           test -e xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6
           strings xenial-sysroot/lib/arm-linux-gnueabihf/libc.so.6 | grep -q GLIBC_2.23
+      - name: Cross-build ARMv7 standalone 7zr (LZMA 7z extraction)
+        working-directory: p7zip/CPP/7zip/Bundles/Alone7z
+        run: |
+          set -eu
+          export CC="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-gcc"
+          export CXX="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-g++"
+          # Makefile uses MY_ARCH for compile+link flags and its own LDFLAGS.
+          make -f makefile.gcc -j2 ST_MODE=1 \
+             MY_ARCH="--sysroot=$GITHUB_WORKSPACE/xenial-sysroot -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -static-libstdc++ -static-libgcc" \
+             LD_arch="-Wl,-rpath-link,$GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf" \
+             LIB2="-lpthread -ldl $GITHUB_WORKSPACE/xenial-sysroot/lib/arm-linux-gnueabihf/libm.so.6"
+          test -s _o/7zr
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp _o/7zr "$GITHUB_WORKSPACE/dist/7zr"
+          file "$GITHUB_WORKSPACE/dist/7zr"
+          "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf" -h "$GITHUB_WORKSPACE/dist/7zr" | grep -q 'Machine:.*ARM'
+          if "$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf" -V "$GITHUB_WORKSPACE/dist/7zr" | grep -Eq 'GLIBC_2\.(2[4-9]|[3-9][0-9])'; then
+             echo 'ERROR: incompatible 7zr GLIBC version'; exit 1
+          fi
       - name: Apply original Ik Core SGBPACK1 #117 firmware/audio modifications
         run: |
           set -eu
@@ -218,7 +244,7 @@ jobs:
         run: |
           set -eu
           READELF="$GITHUB_WORKSPACE/toolchain/bin/arm-linux-gnueabihf-readelf"
-          for bin in dist/mgba_libretro.so dist/ikcore-fase5-mgba-n2 dist/ikcore_spc_libretro.so; do
+          for bin in dist/mgba_libretro.so dist/ikcore-fase5-mgba-n2 dist/ikcore_spc_libretro.so dist/7zr; do
             file "$bin" | grep -q 'ELF 32-bit'
             "$READELF" -h "$bin" | grep -q 'Machine:.*ARM'
             "$READELF" -h "$bin" | grep -q 'hard-float ABI'
@@ -240,31 +266,32 @@ jobs:
           cp dist/ikcore-fase5-mgba-n2 stage/usr/lib/ikcore-fase6/ikcore-fase6-n2
           cp dist/mgba_libretro.so stage/usr/lib/ikcore-fase6/
           cp dist/ikcore_spc_libretro.so stage/usr/lib/ikcore-fase6/
-          cat > stage/bin/ikcore-fase6-hybrid <<'EOF'
-          #!/bin/sh
-          exec /usr/lib/ikcore-fase6/ikcore-fase6-n2 "$@"
-          EOF
+          cp dist/7zr stage/usr/lib/ikcore-fase6/
+          cp ikcore-project/experimental/fase6/ikcore-fase6-hybrid-launcher.sh stage/bin/ikcore-fase6-hybrid
           cat > stage/install <<'EOF'
           #!/bin/sh
           mkdir -p "$rootfs/usr/lib/ikcore-fase6"
           copy "./usr/lib/ikcore-fase6/ikcore-fase6-n2" "$rootfs/usr/lib/ikcore-fase6/ikcore-fase6-n2"
           copy "./usr/lib/ikcore-fase6/mgba_libretro.so" "$rootfs/usr/lib/ikcore-fase6/mgba_libretro.so"
           copy "./usr/lib/ikcore-fase6/ikcore_spc_libretro.so" "$rootfs/usr/lib/ikcore-fase6/ikcore_spc_libretro.so"
+          copy "./usr/lib/ikcore-fase6/7zr" "$rootfs/usr/lib/ikcore-fase6/7zr"
           copy "./bin/ikcore-fase6-hybrid" "$rootfs/bin/ikcore-fase6-hybrid"
-          chmod +x "$rootfs/bin/ikcore-fase6-hybrid" "$rootfs/usr/lib/ikcore-fase6/ikcore-fase6-n2"
+          chmod +x "$rootfs/bin/ikcore-fase6-hybrid" "$rootfs/usr/lib/ikcore-fase6/ikcore-fase6-n2" "$rootfs/usr/lib/ikcore-fase6/7zr"
           EOF
           cat > stage/uninstall <<'EOF'
           #!/bin/sh
           rm -f "$rootfs/bin/ikcore-fase6-hybrid"
           rm -f "$rootfs/usr/lib/ikcore-fase6/ikcore-fase6-n2"
-          rm -f "$rootfs/usr/lib/ikcore-fase6/mgba_libretro.so" "$rootfs/usr/lib/ikcore-fase6/ikcore_spc_libretro.so"
+          rm -f "$rootfs/usr/lib/ikcore-fase6/mgba_libretro.so" "$rootfs/usr/lib/ikcore-fase6/ikcore_spc_libretro.so" "$rootfs/usr/lib/ikcore-fase6/7zr"
           rmdir "$rootfs/usr/lib/ikcore-fase6" 2>/dev/null || true
           EOF
-          chmod 755 stage/install stage/uninstall stage/bin/ikcore-fase6-hybrid stage/usr/lib/ikcore-fase6/ikcore-fase6-n2
+          chmod 755 stage/install stage/uninstall stage/bin/ikcore-fase6-hybrid stage/usr/lib/ikcore-fase6/ikcore-fase6-n2 stage/usr/lib/ikcore-fase6/7zr
           printf '%s\n' \
             'Fase 6 EXPERIMENTAL: mGBA GB CPU/PPU/APU + separate original Ik Core #117 SGB N-SPC audio' \
             'No firmware, BIOS or commercial ROM is bundled; supply user-owned SGBPACK1.' \
-            'One-file: /bin/ikcore-fase6-hybrid /path/game_SGBPACK1.sfc' \
+            'One-file original Hakchi: /bin/ikcore-fase6-hybrid /var/games/CLV-.../juego.sfc.7z' \
+            'One-file uncompressed: /bin/ikcore-fase6-hybrid /path/game_SGBPACK1.sfc' \
+            'Bundled ARMv7 7zr extracts to private /tmp, validates pack CRC, deletes tmp on exit.' \
             'Optional two-file: /bin/ikcore-fase6-hybrid /path/KOF96.gb /path/KOF96_SGBPACK.sfc' \
             'Fallback SGBPACK: /var/lib/hakchi/sgb-native-test/KOF96_SGBPACK_v1_REUPLOAD.sfc' \
             'Snes9x BIOS bootstrap may take hundreds/thousands of emulated frames.' \
@@ -273,6 +300,8 @@ jobs:
             'Never overwrites stable Ik Core #43, #26 or /bin/sgbpack-native.' \
             'Log: /var/lib/hakchi/sgb-native-test/ikcore-fase6-hybrid-*.log' \
             > stage/README.txt
+          test -x stage/usr/lib/ikcore-fase6/7zr
+          grep -q 'IKF6 ARCHIVE:' stage/bin/ikcore-fase6-hybrid
           tar -C stage -czf "IkCore-Fase6-HYBRID-EXPERIMENTAL-$GITHUB_RUN_NUMBER.hmod" .
           sha256sum "IkCore-Fase6-HYBRID-EXPERIMENTAL-$GITHUB_RUN_NUMBER.hmod" > "IkCore-Fase6-HYBRID-EXPERIMENTAL-$GITHUB_RUN_NUMBER.hmod.sha256"
       - name: Upload diagnostic artifact
